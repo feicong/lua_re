@@ -1,0 +1,440 @@
+//------------------------------------------------
+//--- 010 Editor v8.0 Binary Template
+//
+//      File: luac.bt
+//   Authors: fei_cong(346345565@qq.com)
+//   Version: 1.0
+//   Purpose: 
+//  Category: Programming
+// File Mask: *.luac, *.lua
+//  ID Bytes: 1B 4c 75 61
+//   History: 
+//      1.0   fei_cong: Initial version, support lua 5.2.
+//
+// License: This file is released into the public domain. People may 
+//          use it for any purpose, commercial or otherwise. 
+//------------------------------------------------
+
+enum <uchar> LUA_DATATYPE {
+    LUA_TNIL		=     0,
+    LUA_TBOOLEAN	=	  1,
+    LUA_TLIGHTUSERDATA =  2,
+    LUA_TNUMBER		=     3,
+    LUA_TSTRING		=     4,
+    LUA_TTABLE		=     5,
+    LUA_TFUNCTION	=     6,
+    LUA_TUSERDATA	=     7,
+    LUA_TTHREAD		=     8,
+    LUA_NUMTAGS	     =    9,
+
+    LUA_TLCL        =	 (LUA_TFUNCTION | (0 << 4)),  /* Lua closure */
+    LUA_TLCF	    =    (LUA_TFUNCTION | (1 << 4)),  /* light C function */
+    LUA_TCCL	    =    (LUA_TFUNCTION | (2 << 4)),  /* C closure */
+
+    LUA_TSHRSTR	 =   (LUA_TSTRING | (0 << 4)),  /* short strings */
+    LUA_TLNGSTR	 =   (LUA_TSTRING | (1 << 4)),  /* long strings */
+
+    LUA_TNUMFLT	 =   (LUA_TNUMBER | (0 << 4)),  /* float numbers */
+    LUA_TNUMINT =	 (LUA_TNUMBER | (1 << 4))  /* integer numbers */
+};
+
+enum OpMode {iABC, iABx, iAsBx};  /* basic instruction format */
+
+#define SIZE_C		9
+#define SIZE_B		9
+#define SIZE_Bx		(SIZE_C + SIZE_B)
+#define SIZE_A		8
+#define SIZE_Ax		(SIZE_C + SIZE_B + SIZE_A)
+
+#define SIZE_OP		6
+
+#define POS_OP		0
+#define POS_A		(POS_OP + SIZE_OP)
+#define POS_C		(POS_A + SIZE_A)
+#define POS_B		(POS_C + SIZE_C)
+#define POS_Bx		POS_C
+#define POS_Ax		POS_A
+
+#define MAXARG_Bx        ((1<<SIZE_Bx)-1)
+#define MAXARG_sBx        (MAXARG_Bx>>1) 
+
+//forward declaration
+struct Proto;
+struct Inst;
+struct Code;
+
+/*
+** Macros to operate RK indices
+*/
+
+/* this bit 1 means constant (0 means register) */
+#define BITRK		(1 << (SIZE_B - 1))
+
+/* test whether value is a constant */
+//#define ISK(x)		((x) & BITRK)
+int ISK(int x) {
+    return ((x) & BITRK);
+}
+
+/* gets the index of the constant */
+//#define INDEXK(r)	((int)(r) & ~BITRK)
+int INDEXK(int r) {
+	return ((r) & ~BITRK);
+}
+
+#define MAXINDEXRK	(BITRK - 1)
+
+/* code a constant index as a RK value */
+//#define RKASK(x)	((x) | BITRK)
+int RKASK(int x) {
+	return ((x) | BITRK);
+}
+
+//#define CC(r) (ISK((r)) ? 'K' : 'R')
+int CC(int r) {
+    return (ISK((r)) ? 'K' : 'R');
+}
+
+//#define CV(r) (ISK((r)) ? INDEXK(r) : r)
+int CV(int r) {
+    return (ISK((r)) ? INDEXK(r) : r);
+}
+
+//TODO: update LUA_NUMBER & LUA_INTEGER length.
+#define LUA_NUMBER	double
+#define LUA_INTEGER	int64 //ptrdiff_t
+
+/* type of numbers in Lua */
+typedef LUA_NUMBER lua_Number;
+
+/* type for integer functions */
+typedef LUA_INTEGER lua_Integer;
+
+
+typedef struct {
+    int b <format=hex>;           /* booleans */
+    int tt_ <format=hex>;
+} lua_Val;
+
+typedef struct {
+    union Value {
+        //GCObject *gc;    /* collectable objects */
+        //void *p;         /* light userdata */
+        lua_Val val;           /* booleans */
+        //lua_CFunction f; /* light C functions */
+        lua_Integer i <format=hex>;   /* integer numbers */
+        lua_Number n <format=hex>;    /* float numbers */
+    } value_ <optimize=false>;
+} TValue <optimize=false>;
+
+typedef uint32 lu_int32;
+typedef lu_int32 Instruction;
+
+#define MAXSTACK	250
+#define MAXCONSTSIZE 1024
+
+typedef struct {
+    uint32 signature <format=hex>;   //".lua"
+    uchar version <format=hex>;
+    uchar format <comment = "format (0=official)">;
+    uchar endian <comment = "1 == LittleEndian; 0 == BigEndian">;
+    uchar size_int <comment = "sizeof(int)">;
+    uchar size_size_t <comment = "sizeof(size_t)">;
+    uchar size_Instruction <comment = "sizeof(Instruction)">;
+    uchar size_lua_Number <comment = "sizeof(lua_Number)">;
+    uchar lua_num_valid <comment = "Determine lua_Number whether it works or not, It's usually 0">;
+    if (version == 0x52) {
+        uchar luac_tail[0x6] <format=hex, comment = "data to catch conversion errors">;
+    }
+} GlobalHeader;
+
+typedef struct {
+    LUA_DATATYPE const_type;
+    if (constant.const_type == LUA_TBOOLEAN) {
+        uchar bool_val;
+    } else if (const_type == LUA_TNUMBER) {
+        TValue num_val <format=hex>;
+    } else if (const_type == LUA_TSTRING) {
+        uint64 string_size <format=hex>;
+        char str_val[string_size];
+    } else if (const_type == LUA_TNIL) {
+    } else {
+        Warning("need update,const_type:%x\n", const_type);
+    }
+} Constant <read = ConstantRead, optimize=false>;
+
+string number2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local int tt = o.value_.val.tt_;
+    //Printf("tt:%x\n", tt);
+    local lua_Integer i = o.value_.i;
+    local lua_Number n = o.value_.n;
+    SPrintf(ret, "%.14g", ((tt == (3 | (1 << 4))) ? i : n));
+
+    return ret;
+}
+
+string numflt2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local lua_Number n = o.value_.n;
+    SPrintf(ret, "%.14g", n);
+
+    return ret;
+}
+
+string numint2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local lua_Integer i = o.value_.i;
+    SPrintf(ret, "%.14g", i);
+
+    return ret;
+}
+
+string ConstantRead(Constant& constant) {
+    local string str;
+    switch (constant.const_type) {
+        case LUA_TBOOLEAN:
+        {
+            SPrintf(str, "%s", constant.bool_val ? "true" : "false");
+            return str;
+        }
+        case LUA_TNIL:
+        {
+            return "nil";
+        }
+        case LUA_TNUMBER:
+        {
+            return number2str(constant.num_val);
+        }
+        case LUA_TSTRING:
+        {
+            return "(=\"" + constant.str_val + "\")";
+        }
+        case LUA_TNUMFLT:
+        {
+            return numflt2str(constant.num_val);
+        }
+        case LUA_TNUMINT:
+        {
+            return numint2str(constant.num_val);
+        }
+        case LUA_TSHRSTR:
+        case LUA_TLNGSTR:
+        {
+            return "(=\"" + constant.str_val + "\")";
+        }
+        default:
+            return "";
+    }
+}
+
+typedef struct {
+    //uint64 name_size <format=hex>;
+    //char name[name_size];
+    uchar instack <comment="whether it is in stack (register)">;
+    uchar idx <comment="index of upvalue (in stack or in outer function's list)">;
+} Upvaldesc;
+
+typedef struct {
+    uint64 varname_size <format=hex>;
+    char varname[varname_size];
+    uint32 startpc <format=hex, comment="first point where variable is active">;
+    uint32 endpc <format=hex, comment="first point where variable is dead">;
+} LocVar <read = LocVarRead, optimize = false>;
+
+string LocVarRead(LocVar &val) {
+    return val.varname;
+}
+
+typedef struct {
+    uint32 sizek <format=hex>;
+    local uint32 sz = sizek;
+    while (sz-- > 0) {
+        Constant constant;
+    }
+} Constants <optimize=false>;
+
+typedef struct {
+    uint32 sizeupvalues <format=hex>;
+    local uint32 sz = sizeupvalues;
+    while (sz-- > 0) {
+        Upvaldesc upvalue;
+    }
+} Upvaldescs <optimize=false>;
+
+#define NUM_OPCODES     ((int)OP_EXTRAARG + 1)
+
+typedef struct {
+    uint32 linedefined <format=hex>;
+    uint32 lastlinedefined <format=hex>;
+    uchar numparams <format=hex>;
+    uchar is_vararg;
+    uchar maxstacksize <format=hex>;
+} ProtoHeader;
+
+typedef struct(string level) {
+    uint32 sizep <format=hex>;
+    local uint32 sz = sizep;
+    local uint32 i = 0;
+    local string s_level;
+    while (sz-- > 0) {
+        SPrintf(s_level, "%s_%d", level, i++);
+        Proto proto(s_level);
+    };
+} Protos <optimize=false>;
+
+typedef struct {
+    uint32 sizelineinfo <format=hex>;
+    local uint32 sz = sizelineinfo;
+    while (sz-- > 0) {
+        uint32 line;
+    };
+} Lines <optimize=false>;
+
+typedef struct {
+    uint64 src_string_size <format=hex>;
+    char str[src_string_size];
+} SourceName <read = SourceNameRead>;
+
+string SourceNameRead(SourceName &name) {
+    return name.str;
+}
+
+typedef struct {
+    uint32 sizelocvars;
+    local uint32 sz = sizelocvars;
+    while (sz-- > 0) {
+        LocVar local_var;
+    };
+} LocVars <optimize=false>;
+
+typedef struct {
+    uint64 name_size <format=hex>;
+    char var_str[name_size];
+} UpValueName <read = UpValueNameRead, optimize=false>;
+
+string UpValueNameRead(UpValueName& name) {
+    return name.var_str;
+}
+
+typedef struct {
+    uint32 size_upvalue_names <format=hex>;
+    local uint32 sz = size_upvalue_names;
+    while (sz-- > 0) {
+        UpValueName upvalue_name;
+    }
+} UpValueNames <optimize=false>;
+
+typedef struct(int pc) {
+    local int pc_ = pc;
+    local uchar inst_sz = get_inst_sz();
+    if (inst_sz == 4) {
+        uint32 inst;
+    } else {
+        Warning("Error size_Instruction.");
+    }
+} Inst <optimize=false>;
+
+typedef struct {
+    uint32 sizecode <format=hex>;
+    local uchar inst_sz = get_inst_sz();
+    local int pc = 1;
+    if (inst_sz == 4) {
+        local uint32 sz = sizecode;
+        while (sz-- > 0) {
+            Inst inst(pc);
+            pc++;
+        }
+    } else {
+        Warning("Error size_Instruction.");
+    }
+} Code <optimize=false>;
+
+typedef struct(string level) {
+    local string level_ = level;
+    //Printf("level:%s\n", level_);
+
+    //header
+    ProtoHeader header;
+
+    //code
+    Code code;
+
+    // constants
+    Constants constants;
+
+    // functions
+    Protos protos(level_);
+
+    // upvalues
+    Upvaldescs upvaldescs;
+
+    // string
+    SourceName src_name;
+
+    // lines
+    Lines lines;
+    
+    // locals
+    LocVars loc_vars;
+    
+    // upvalue names
+    UpValueNames names;
+} Proto <read=ProtoRead>;
+
+string ProtoRead(Proto& proto) {
+    return "function level " + proto.level_;
+}
+
+uchar get_inst_sz() {
+    return luac.header.size_Instruction;
+    //return ReadByte(9);
+}
+
+uchar get_lua_version() {
+    return luac.header.version;
+}
+
+typedef struct {
+    GlobalHeader header;
+    Proto proto("0");
+} Luac;
+
+////////////////////////////////start from here//////////////////
+// $ luac -o ~/Desktop/allopcodes52.luac ~/git/luadec/bin/allopcodes-5.2.lua
+local char endian = ReadByte(6);
+//Printf("Endian:%d\n", endian);
+
+if (endian == 1) {
+    LittleEndian();
+} else if(0 == endian) {
+    BigEndian();
+} else {
+    Warning("Error endian.");
+}
+
+Luac luac;
