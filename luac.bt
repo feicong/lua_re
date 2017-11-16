@@ -2,7 +2,8 @@
 //--- 010 Editor v8.0 Binary Template
 //
 //      File: LUAC.bt
-//   Authors: fei_cong(346345565@qq.com)
+//   Authors: feicong
+//    E-mail: 346345565@qq.com
 //       Url: https://github.com/feicong/lua_re
 //   Version: 1.1
 //   Purpose: Parse lua bytecode .lua and .luac files, support lua 5.2. 
@@ -10,8 +11,8 @@
 // File Mask: *.luac, *.lua
 //  ID Bytes: 1B 4c 75 61
 //   History: 
-//      1.1   2017-10-28 fei_cong: add disassembler engine: InstructionRead().
-//      1.0   2017-10-12 fei_cong: Initial version, support lua 5.2.
+//      1.1   2017-10-28 feicong: add disassembler engine: InstructionRead().
+//      1.0   2017-10-12 feicong: Initial version, support lua 5.2.
 //
 //   License: This file is released into the public domain. People may 
 //          use it for any purpose, commercial or otherwise. 
