@@ -1,0 +1,630 @@
+//------------------------------------------------
+//--- 010 Editor v8.0 Binary Template
+//
+//      File: LUAJIT.bt
+//   Authors: fei_cong(346345565@qq.com)
+//   Version: 1.0
+//   Purpose: Parse luajit bytecode files, support luajit 2.0.5. 
+//  Category: Programming
+// File Mask: *
+//  ID Bytes: 1B 4C 4A
+//   History: 
+//      1.0   fei_cong: Initial version, support luajit 2.0.5.
+//
+//   License: This file is released into the public domain. People may 
+//          use it for any purpose, commercial or otherwise. 
+//------------------------------------------------
+
+typedef enum<uchar> {
+    _FLAG_IS_BIG_ENDIAN = 0b00000001,
+    _FLAG_IS_STRIPPED = 0b00000010,
+    _FLAG_HAS_FFI = 0b00000100
+} FLAG;
+
+typedef enum<uchar> {
+    FLAG_HAS_CHILD = 0b00000001,
+    FLAG_IS_VARIADIC = 0b00000010,
+    FLAG_HAS_FFI = 0b00000100,
+    FLAG_JIT_DISABLED = 0b00001000,
+    FLAG_HAS_ILOOP = 0b00010000
+} PROTO_FLAG;
+
+typedef enum<uchar> {
+    VARNAME_END = 0,
+    VARNAME_FOR_IDX = 1,
+    VARNAME_FOR_STOP = 2,
+    VARNAME_FOR_STEP = 3,
+    VARNAME_FOR_GEN = 4,
+    VARNAME_FOR_STATE = 5,
+    VARNAME_FOR_CTL = 6,
+    VARNAME__MAX = 7
+} VARNAME_TYPE;
+
+typedef enum<uchar> {
+    BCDUMP_KGC_CHILD = 0,
+    BCDUMP_KGC_TAB = 1,
+    BCDUMP_KGC_I64 = 2,
+    BCDUMP_KGC_U64 = 3,
+    BCDUMP_KGC_COMPLEX = 4,
+    BCDUMP_KGC_STR = 5
+} BCDUMP_KGC_TYPE;
+
+typedef enum<uchar> {
+    BCDUMP_KTAB_NIL = 0,
+    BCDUMP_KTAB_FALSE = 1,
+    BCDUMP_KTAB_TRUE = 2,
+    BCDUMP_KTAB_INT = 3,
+    BCDUMP_KTAB_NUM = 4,
+    BCDUMP_KTAB_STR = 5
+} BCDUMP_KTAB_TYPE;
+
+typedef struct {
+    ubyte val <comment="uleb128 element">;
+    if(val > 0x7f) {
+        ubyte val <comment="uleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="uleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="uleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="uleb128 element">;
+                }
+            }
+        }
+    }
+} uleb128 <read=ULeb128Read, comment="Unsigned little-endian base 128 value">;
+
+typedef struct {
+    ubyte val;
+    if((val >> 1) > 0x3f) {
+        ubyte val <comment="uleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="uleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="uleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="uleb128 element">;
+                }
+            }
+        }
+    }
+} uleb128_33 <read=uleb128_33Read>;
+
+int uleb128_33_value(uleb128_33 &u) {
+    local uint result;
+    local ubyte cur;
+
+    result = (u.val[0] >> 0x1);
+    if(result > 0x3f) {
+        cur = u.val[1];
+        result = (result & 0x3f) | (uint)((cur & 0x7f) << 6);
+        if(cur > 0x7f) {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 13;
+            if(cur > 0x7f) {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 20;
+                if(cur > 0x7f) {
+                    cur = u.val[4];
+                    result |= (uint)cur << 27;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+string uleb128_33Read(uleb128_33 &u) {
+    local string s;
+    s = SPrintf(s, "0x%X", uleb128_33_value(u));
+    return s;
+}
+
+// get the actual uint value of the uleb128
+uint uleb128_value(uleb128 &u) {
+    local uint result;
+    local ubyte cur;
+
+    result = u.val[0];
+    if(result > 0x7f) {
+        cur = u.val[1];
+        result = (result & 0x7f) | (uint)((cur & 0x7f) << 7);
+        if(cur > 0x7f) {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 14;
+            if(cur > 0x7f) {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 21;
+                if(cur > 0x7f) {
+                    cur = u.val[4];
+                    result |= (uint)cur << 28;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+typedef struct uleb128 uleb128p1;
+
+int uleb128p1_value(uleb128 &u) {
+    return (int)uleb128_value(u) - 1;
+}
+
+string ULeb128Read(uleb128 &u) {
+    local string s;
+    s = SPrintf(s, "0x%X", uleb128_value(u));
+    return s;
+}
+
+// sleb128
+typedef struct {
+    ubyte val <comment="sleb128 element">;
+    if(val > 0x7f) {
+        ubyte val <comment="sleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="sleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="sleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="sleb128 element">; 
+                }
+            }
+        }
+    }
+} sleb128 <read=SLeb128Read, comment="Signed little-endian base 128 value">;
+
+// get the actual uint value of the uleb128
+int sleb128_value(sleb128 &u) {
+    local int result;
+    local ubyte cur;
+
+    result = u.val[0];
+    if(result <= 0x7f) {
+        result = (result << 25) >> 25;
+    } else {
+        cur = u.val[1];
+        result = (result & 0x7f) | ((uint)(cur & 0x7f) << 7);
+        if(cur <= 0x7f) {
+            result = (result << 18) >> 18;
+        } else {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 14;
+            if(cur <= 0x7f) {
+                result = (result << 11) >> 11;
+            } else {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 21;
+                if(cur <= 0x7f) {
+                    result = (result << 4) >> 4;
+                } else {
+                    cur = u.val[4];
+                    result |= (uint)cur << 28;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+string SLeb128Read(sleb128 &u) {
+    local string s;
+    s = SPrintf(s, "%i", sleb128_value(u));
+    return s;
+}
+
+typedef struct {
+    uleb128 lo;
+    uleb128 hi;
+} TNumber <read=TNumberRead, optimize=false>;
+
+string TNumberRead(TNumber &num) {
+    local string str;
+    local int i_lo = uleb128_value(num.lo);
+    local int i_hi = uleb128_value(num.hi);
+    //Printf("lo: 0x%lx\n", i_lo);
+    //Printf("hi: 0x%lx\n", i_hi);
+    local uchar bytes_lo[4];
+    local uchar bytes_hi[4];
+    local uchar bytes_double[8];
+    ConvertDataToBytes(i_lo, bytes_lo);
+    ConvertDataToBytes(i_hi, bytes_hi);
+    Memcpy(bytes_double, bytes_lo, 4);
+    Memcpy(bytes_double, bytes_hi, 4, 4);
+    
+    local double n = ConvertBytesToDouble(bytes_double);
+    //Printf("n:%.14g\n", n);
+    SPrintf(str, "%.14g", ((uleb128_value(num.hi) == (3 | (1 << 4))) ? 
+        i : 
+        n));
+    return str;
+}
+
+typedef struct {
+    uleb128 tp;
+    local int32 data_type = uleb128_value(tp);
+    if (data_type >= BCDUMP_KTAB_STR) {
+        local int32 len = data_type - BCDUMP_KTAB_STR;
+        char str[len];
+    } else if (data_type == BCDUMP_KTAB_INT) {
+        uleb128 val;
+    } else if (data_type == BCDUMP_KTAB_NUM) {
+        TNumber num;
+    } else if (data_type == BCDUMP_KTAB_TRUE) {
+    } else if (data_type == BCDUMP_KTAB_FALSE) {
+    } else if (data_type == BCDUMP_KTAB_NIL) {
+    } else {
+        Warning("TableItem need update\n");
+    }
+} TableItem <read=TableItemRead, optimize=false>;
+
+string TableItemRead(TableItem &item) {
+    if (item.data_type >= BCDUMP_KTAB_STR) {
+        return item.str;
+    } else if (item.data_type == BCDUMP_KTAB_INT) {
+        local string str;
+        SPrintf(str, "%ld", uleb128_value(item.val));
+        return str;
+    } else if (item.data_type == BCDUMP_KTAB_NUM) {
+        return TNumberRead(item.num);
+    } else if (item.data_type == BCDUMP_KTAB_TRUE) {
+        return "true";
+    } else if (item.data_type == BCDUMP_KTAB_FALSE) {
+        return "false";
+    } else if (item.data_type == BCDUMP_KTAB_NIL) {
+        return "nil";
+    } else {
+        return "";
+    }
+}
+
+typedef struct {
+    TableItem constant;
+} ArrayItem;
+
+typedef struct {
+    TableItem key;
+    TableItem value;
+} HashItem <read=HashItemRead>;
+
+string HashItemRead(HashItem &item) {
+    local string str;
+    SPrintf(str, "%s = %s", TableItemRead(item.key), TableItemRead(item.value));
+    return str;
+}
+
+typedef struct {
+    uleb128 array_items_count;
+    uleb128 hash_items_count;
+
+    local int32 array_items_count_ = uleb128_value(array_items_count);
+    local int32 hash_items_count_ = uleb128_value(hash_items_count);
+    while (array_items_count_-- > 0) {
+        ArrayItem array_item;
+    }
+    while (hash_items_count_-- > 0) {
+        HashItem hash_item;
+    }
+} Table;
+
+typedef struct {
+    local uint32 len = 0;
+    uleb128 tp <format=hex>;
+    local int32 constant_type = uleb128_value(tp);
+    //Printf("ComplexConstant constant_type:%x\n", constant_type);
+    if (constant_type >= BCDUMP_KGC_STR) {
+        len = constant_type - BCDUMP_KGC_STR;
+        char str[len];
+        //Printf("len:%d str:%s\n", len, str);
+    } else if (constant_type == BCDUMP_KGC_TAB) {
+        Table table;
+    } else if (constant_type == BCDUMP_KGC_CHILD) {
+    } else if (constant_type != BCDUMP_KGC_CHILD) {
+        TNumber num;
+        if (constant_type == BCDUMP_KGC_COMPLEX) {
+            TNumber imaginary;
+        }
+    }
+} ComplexConstant <read=ComplexConstantRead, optimize=false>;
+
+string ComplexConstantRead(ComplexConstant &constant) {
+    if (constant.constant_type >= BCDUMP_KGC_STR) {
+        return constant.str;
+    } else if (constant.constant_type == BCDUMP_KGC_CHILD) {
+        return "BCDUMP_KGC_CHILD";
+    } else if (constant.constant_type == BCDUMP_KGC_TAB) {
+        return "BCDUMP_KGC_TAB";
+    } else if (constant_type == BCDUMP_KGC_COMPLEX) {
+        return "";  //TODO: parser BCDUMP_KGC_COMPLEX.
+    } else {
+        return TNumberRead(constant.num);
+    }
+}
+
+typedef struct {
+    uleb128_33 lo;
+    if (lo.val[0] & 0x1)
+        uleb128 hi;
+} NumericConstant <read=NumericConstantRead, optimize=false>;
+
+string NumericConstantRead(NumericConstant &constant) {
+    if (constant.lo.val[0] & 0x1) {
+        local string str;
+        local int i_lo = uleb128_33_value(constant.lo);
+        local int i_hi = uleb128_value(constant.hi);
+        //Printf("lo: 0x%lx\n", i_lo);
+        //Printf("hi: 0x%lx\n", i_hi);
+        local uchar bytes_lo[4];
+        local uchar bytes_hi[4];
+        local uchar bytes_double[8];
+        ConvertDataToBytes(i_lo, bytes_lo);
+        ConvertDataToBytes(i_hi, bytes_hi);
+        Memcpy(bytes_double, bytes_lo, 4);
+        Memcpy(bytes_double, bytes_hi, 4, 4);
+        /*
+        local int idx = 0;
+        for (idx=0; idx<4; idx++) {
+            Printf("%02x ", bytes_lo[idx]);
+        }
+        Printf("\n");
+        for (idx=0; idx<4; idx++) {
+            Printf("%02x ", bytes_hi[idx]);
+        }
+        Printf("\n");
+        for (idx=0; idx<8; idx++) {
+            Printf("%02x ", bytes_double[idx]);
+        }
+        Printf("\n");
+        */
+        local double n = ConvertBytesToDouble(bytes_double);
+        //Printf("n:%.14g\n", n);
+        SPrintf(str, "%.14g", ((uleb128_value(constant.hi) == (3 | (1 << 4))) ? 
+            i : 
+            n));
+        return str;
+    } else {
+        local string str;
+        local int number = uleb128_33_value(constant.lo);
+        if (number & 0x80000000)
+            number = -0x100000000 + number;
+
+        SPrintf(str, "0x%lx", number);
+        return str;
+    }
+}
+
+typedef struct(int32 upvalues_count, int32 complex_constants_count, int32 numeric_constants_count) {
+    //Printf("upvalues_count:%d, complex_constants_count:%d, numeric_constants_count:%d\n", upvalues_count, complex_constants_count, numeric_constants_count);
+    while (upvalues_count-- > 0) {
+        uint16 upvalue;
+    }
+    
+    while (complex_constants_count-- > 0) {
+        ComplexConstant constant;
+    }
+
+    while (numeric_constants_count-- > 0) {
+        NumericConstant numeric;
+    }
+} Constants <optimize=false>;
+
+typedef struct {
+    uleb128 flags <format=hex>;
+} GlobalHeaderFlags <read=GlobalHeaderFlagRead, optimize=false>;
+
+string GlobalHeaderFlagRead(GlobalHeaderFlags &flags) {
+    //local char bits = uleb128_value(flags.flags);
+
+    ////
+    local string str;
+    if (is_big_endian)
+            str += "FLAG_IS_BIG_ENDIAN | ";
+    if (is_stripped)
+        str += "FLAG_IS_STRIPPED | ";
+    if (has_ffi)
+        str += "FLAG_HAS_FFI | ";
+
+    if (Strlen(str) > 3)
+        str = SubStr(str, 0, Strlen(str) - 3);
+    return str;
+}
+
+typedef struct {
+    char signature[3]<format=hex>;   //".LJ"
+    uchar version;
+    if (Memcmp(signature, "\033LJ", 3) != 0) {
+        Warning("Error signature.");
+    }
+    GlobalHeaderFlags flags;
+    local string name = "";
+    if (is_stripped) {
+        Printf("stripped file.\n");
+    } else {
+        uleb128 length <format=hex>;
+        char chunkname[uleb128_value(length)];
+        name = chunkname;
+    }
+} GlobalHeader <optimize=false>;
+
+typedef struct {
+    uchar flags;
+} ProtoFlags <read=ProtoFlagsRead>;
+
+string ProtoFlagsRead(ProtoFlags& flags) {
+    local uchar bits = flags.flags;
+    local uchar has_ffi = (bits & FLAG_HAS_FFI);
+	bits &= ~FLAG_HAS_FFI;
+	local uchar has_iloop = (bits & FLAG_HAS_ILOOP);
+	bits &= ~FLAG_HAS_ILOOP;
+	local uchar has_jit =  !(bits & FLAG_JIT_DISABLED);
+	bits &= ~FLAG_JIT_DISABLED;
+	local uchar has_sub_prototypes = (bits & FLAG_HAS_CHILD);
+	bits &= ~FLAG_HAS_CHILD;
+	local uchar is_variadic = (bits & FLAG_IS_VARIADIC);
+	bits &= ~FLAG_IS_VARIADIC;
+
+	if (bits != 0) {
+        Warning("Unknown prototype flags.");
+    }
+
+	local string str = "";
+    if (has_ffi)
+        str += "FLAG_HAS_FFI | ";
+    if (has_iloop)
+        str += "FLAG_HAS_ILOOP | ";
+    if (has_jit)
+        str += "FLAG_HAS_JIT | ";
+    if (has_sub_prototypes)
+        str += "FLAG_HAS_CHILD | ";
+    if (is_variadic)
+        str += "FLAG_IS_VARIADIC | ";
+
+    if (Strlen(str) > 3)
+        str = SubStr(str, 0, Strlen(str) - 3);
+    return str;
+}
+
+typedef struct {
+    uint32 inst;
+} Instruction;
+
+typedef struct {
+    uleb128 size <format=hex>;
+    if (uleb128_value(size) > 0) {
+        local int64 start = FTell();
+        ProtoFlags flags;
+        uchar arguments_count;
+        uchar framesize;
+        uchar upvalues_count <format=hex>;
+        uleb128 complex_constants_count <format=hex>;
+        uleb128 numeric_constants_count <format=hex>;
+        uleb128 instructions_count <format=hex>;
+        local int32 debuginfo_size_ = 0;
+        if (!is_stripped) {
+            uleb128 debuginfo_size <format=hex>;
+            debuginfo_size_ = uleb128_value(header.debuginfo_size);
+            uleb128 first_line_number <format=hex>;
+            uleb128 lines_count <format=hex>;
+        }
+    }
+} ProtoHeader <optimize=false>;
+
+typedef struct(int32 lines_count, int32 instructions_count) {
+    local int32 lineinfo_size = 0;
+    local int32 inst_count = instructions_count;
+    if (lines_count >= 65536) {
+        int line_number[inst_count];
+    } else if (lines_count >= 256) {
+        short line_number[inst_count];
+    } else {
+        char line_number[inst_count];
+    }
+} LineInfo <optimize=false>;
+
+typedef struct(int32 upvalues_count) {
+    while (upvalues_count-- > 0) {
+        string name;
+    }
+} UpValueNames;
+
+typedef struct(uchar tp) {
+    local uchar tp_ = tp;
+    //Printf("tp:0x%x\n", tp);
+    if (tp >= VARNAME__MAX) {
+        string str;
+    } else {
+        VARNAME_TYPE vartype;
+    }
+
+    if (tp != VARNAME_END) {
+        uleb128 start_addr;
+        uleb128 end_addr;
+    }
+} VarInfo <read=VarInfoRead>;
+
+string VarInfoRead(VarInfo &varinfo) {
+    if (varinfo.tp_ >= VARNAME__MAX) {
+        return varinfo.str;
+    } else {
+        return EnumToString(varinfo.vartype);
+    }
+}
+
+typedef struct {
+    local VARNAME_TYPE tp;
+    while (!FEof()) {
+        tp = (VARNAME_TYPE)ReadByte();
+        VarInfo varinfo(tp);
+        if (tp == VARNAME_END) {
+            break;
+        }
+    }
+} VarInfos;
+
+typedef struct(int32 first_line_number, int32 lines_count, int32 instructions_count, int32 debuginfo_size, int32 upvalues_count) {
+    if (debuginfo_size > 0) {
+        LineInfo lineinfo(lines_count, instructions_count);
+
+        if (upvalues_count > 0)
+            UpValueNames upvalue_names(upvalues_count);
+        
+        VarInfos varinfos;
+    }
+} DebugInfo <optimize=false>;
+
+typedef struct() {
+    ProtoHeader header;
+    if (uleb128_value(header.size) > 0) {
+        if (uleb128_value(header.instructions_count) > 0)
+            Instruction inst[uleb128_value(header.instructions_count)];
+        if ((header.upvalues_count == 0) && (uleb128_value(header.complex_constants_count) == 0) && (uleb128_value(header.numeric_constants_count) == 0)) {
+        } else {
+            Constants constants(header.upvalues_count, uleb128_value(header.complex_constants_count), uleb128_value(header.numeric_constants_count));
+        }
+        
+        if (header.debuginfo_size_ > 0)
+            DebugInfo debuginfo(uleb128_value(header.first_line_number), uleb128_value(header.lines_count), uleb128_value(header.instructions_count), header.debuginfo_size_, header.upvalues_count);
+
+        local int64 end = FTell();
+        //Printf("start:0x%lx, end:0x%lx, size:0x%lx\n", header.start, end, end - header.start);
+        if (uleb128_value(header.size) != end - header.start) {
+            Warning("Incorrectly read: from 0x%lx to 0x%lx (0x%lx) instead of 0x%lx\n", header.start, end, end - header.start, uleb128_value(header.size));
+        }
+    }
+} Proto <optimize=false>;
+
+typedef struct {
+    GlobalHeader header;
+    while (!FEof())
+        Proto proto;
+} Luajit <read=LuajitRead>;
+
+string LuajitRead(Luajit &lj) {
+    return lj.header.name;
+}
+
+////////////////////////////////start from here//////////////////
+// $ luajit -bg ./hello.lua ./hello_debug.luajit
+// $ luajit -b ./hello.lua ./hello.luajit
+local char bits = ReadByte(4);
+local uchar is_big_endian = bits & _FLAG_IS_BIG_ENDIAN;
+bits &= ~_FLAG_IS_BIG_ENDIAN;
+local uchar is_stripped = bits & _FLAG_IS_STRIPPED;
+bits &= ~_FLAG_IS_STRIPPED;
+local uchar has_ffi = bits & _FLAG_HAS_FFI;
+bits &= ~_FLAG_HAS_FFI;
+
+if (bits != 0)
+    Warning("Unknown header flags: {0x%x}", bits);
+
+if (is_big_endian) {
+    BitEndian();
+} else {
+    //Printf("LittleEndian.\n");
+    LittleEndian();
+}
+
+Luajit lj;
