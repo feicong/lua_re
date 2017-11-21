@@ -9,7 +9,7 @@
 // File Mask: *
 //  ID Bytes: 1B 4C 4A
 //   History: 
-//      1.0   fei_cong: Initial version, support luajit 2.0.5.
+//      1.0   2017-10-28 fei_cong: Initial version, support luajit 2.0.5.
 //
 //   License: This file is released into the public domain. People may 
 //          use it for any purpose, commercial or otherwise. 
