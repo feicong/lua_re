@@ -1,14 +1,14 @@
 //------------------------------------------------
 //--- 010 Editor v8.0 Binary Template
 //
-//      File: LUAC.bt
+//      File: Luac.bt
 //   Authors: feicong
 //    E-mail: 346345565@qq.com
 //       Url: https://github.com/feicong/lua_re
 //   Version: 1.1
 //   Purpose: Parse lua bytecode .lua and .luac files, support lua 5.2. 
 //  Category: Programming
-// File Mask: *.luac, *.lua
+// File Mask: *
 //  ID Bytes: 1B 4c 75 61
 //   History: 
 //      1.1   2017-10-28 feicong: add disassembler engine: InstructionRead().

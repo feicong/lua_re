@@ -1,15 +1,18 @@
 //------------------------------------------------
 //--- 010 Editor v8.0 Binary Template
 //
-//      File: LUAJIT.bt
-//   Authors: fei_cong(346345565@qq.com)
-//   Version: 1.0
+//      File: LuaJit.bt
+//   Authors: feicong
+//    E-mail: 346345565@qq.com
+//       Url: https://github.com/feicong/lua_re
+//   Version: 1.1
 //   Purpose: Parse luajit bytecode files, support luajit 2.0.5. 
 //  Category: Programming
 // File Mask: *
 //  ID Bytes: 1B 4C 4A
 //   History: 
-//      1.0   2017-10-28 fei_cong: Initial version, support luajit 2.0.5.
+//      1.1   2017-12-11 feicong: Add disassembler engine: InstructionRead().
+//      1.0   2017-10-12 feicong: Initial version, support luajit 2.0.5.
 //
 //   License: This file is released into the public domain. People may 
 //          use it for any purpose, commercial or otherwise. 
@@ -57,6 +60,142 @@ typedef enum<uchar> {
     BCDUMP_KTAB_NUM = 4,
     BCDUMP_KTAB_STR = 5
 } BCDUMP_KTAB_TYPE;
+
+/* Bytecode instruction format, 32 bit wide, fields of 8 or 16 bit:
+**
+** +----+----+----+----+
+** | B  | C  | A  | OP | Format ABC
+** +----+----+----+----+
+** |    D    | A  | OP | Format AD
+** +--------------------
+** MSB               LSB
+**
+** In-memory instructions are always stored in host byte order.
+*/
+
+typedef enum<uchar> {
+    ISLT = 0,
+    ISGE,
+    ISLE,
+    ISGT,
+    ISEQV,
+    ISNEV,
+    ISEQS,
+    ISNES,
+    ISEQN,
+    ISNEN,
+    ISEQP,
+    ISNEP,
+    ISTC,
+    ISFC,
+    IST,
+    ISF,
+    MOV,
+    NOT,
+    UNM,
+    LEN,
+    ADDVN,
+    SUBVN,
+    MULVN,
+    DIVVN,
+    MODVN,
+    ADDNV,
+    SUBNV,
+    MULNV,
+    DIVNV,
+    MODNV,
+    ADDVV,
+    SUBVV,
+    MULVV,
+    DIVVV,
+    MODVV,
+    POW,
+    CAT,
+    KSTR,
+    KCDATA,
+    KSHORT,
+    KNUM,
+    KPRI,
+    KNIL,
+    UGET,
+    USETV,
+    USETS,
+    USETN,
+    USETP,
+    UCLO,
+    FNEW,
+    TNEW,
+    TDUP,
+    GGET,
+    GSET,
+    TGETV,
+    TGETS,
+    TGETB,
+    TSETV,
+    TSETS,
+    TSETB,
+    TSETM,
+    CALLM,
+    CALL,
+    CALLMT,
+    CALLT,
+    ITERC,
+    ITERN,
+    VARG,
+    ISNEXT,
+    RETM,
+    RET,
+    RET0,
+    RET1,
+    FORI,
+    JFORI,
+    FORL,
+    IFORL,
+    JFORL,
+    ITERL,
+    IITERL,
+    JITERL,
+    LOOP,
+    ILOOP,
+    JLOOP,
+    JMP,
+    FUNCF,
+    IFUNCF,
+    JFUNCF,
+    FUNCV,
+    IFUNCV,
+    JFUNCV,
+    FUNCC,
+    FUNCCW
+} INSTRUCTION_OPCODES;
+
+typedef enum<uchar> {
+    BCMnone=0, 
+    BCMdst, 
+    BCMbase, 
+    BCMvar, 
+    BCMrbase, 
+    BCMuv,
+    BCMlit, 
+    BCMlits, 
+    BCMpri, 
+    BCMnum, 
+    BCMstr, 
+    BCMtab, 
+    BCMfunc, 
+    BCMjump, 
+    BCMcdata,
+    BCM_max
+} BCMode;
+
+typedef enum<uchar> {
+    MM_index=0, MM_newindex, MM_gc, MM_mode, MM_eq, MM_len, MM_lt, MM_le, MM_concat, MM_call, MM_add, MM_sub, MM_mul, MM_div, MM_mod, MM_pow, MM_unm, MM_metatable, MM_tostring, MM_new, MM_pairs, MM_ipairs,
+
+   MM__MAX,
+   MM____ = MM__MAX,
+   MM_FAST = MM_len
+ } MMS;
+
 
 typedef struct {
     ubyte val <comment="uleb128 element">;
@@ -487,9 +626,47 @@ string ProtoFlagsRead(ProtoFlags& flags) {
     return str;
 }
 
-typedef struct {
-    uint32 inst;
-} Instruction;
+struct Instruction;
+string InstructionRead(Instruction &inst) {
+    local uint32 codeword = inst.inst;
+    local INSTRUCTION_OPCODES op = (INSTRUCTION_OPCODES)codeword & 0xff;
+    local uint16 mode = get_mode(op);
+    local BCMode ma = get_mode_a(op);
+    local BCMode mb = get_mode_b(op);
+    local BCMode mc = get_mode_c(op);
+    local int args_count = get_args_count(op);
+    //Printf("inst:%x, op:%s(%x), mode:%x, ma:%s(%x), mb:%s(%x), mc:%s(%x), args_count:%x\n", codeword, EnumToString(op), op, mode, EnumToString(ma), ma, EnumToString(mb), mb, EnumToString(mc), mc, args_count);
+    local int A=0, B=0, CD=0;
+    if (args_count == 3) {
+        A = (codeword >> 8) & 0xFF;
+		CD = (codeword >> 16) & 0xFF;
+		B = (codeword >> 24) & 0xFF;
+    } else {
+		A = (codeword >> 8) & 0xFF;
+		CD = (codeword >> 16) & 0xFFFF;
+    }
+
+    local int complex_constants_count = uleb128_value(parentof(parentof(inst)).header.complex_constants_count);
+    //Printf("complex_constants_count:%x\n", complex_constants_count);
+
+    local string tmp;
+    SPrintf(tmp, "%04d    ", inst.pc_);
+    local string line = tmp + EnumToString(op);
+    if (ma != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, ma, A, inst.pc_));
+        line += " " + tmp;
+    }
+    if (mb != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, mb, B, inst.pc_));
+        line += " " + tmp;
+    }
+    if (mc != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, mc, CD, inst.pc_));
+        line += " " + tmp;
+    }
+
+    return line;
+}
 
 typedef struct {
     uleb128 size <format=hex>;
@@ -575,16 +752,32 @@ typedef struct(int32 first_line_number, int32 lines_count, int32 instructions_co
     }
 } DebugInfo <optimize=false>;
 
-typedef struct() {
+typedef struct (int pc) {
+    local int pc_ = pc;
+    uint32 inst;
+} Instruction <read=InstructionRead>;
+
+typedef struct {
     ProtoHeader header;
+
+    typedef struct(int inst_count) {
+        local int pc = 1;
+        local int inst_count_ = inst_count;
+        while (inst_count_-- > 0) {
+            Instruction inst(pc);
+            pc++;
+        }
+    } Instructions;
+
     if (uleb128_value(header.size) > 0) {
         if (uleb128_value(header.instructions_count) > 0)
-            Instruction inst[uleb128_value(header.instructions_count)];
+            local int inst_count = uleb128_value(header.instructions_count);
+            Instructions insts(inst_count);
         if ((header.upvalues_count == 0) && (uleb128_value(header.complex_constants_count) == 0) && (uleb128_value(header.numeric_constants_count) == 0)) {
         } else {
             Constants constants(header.upvalues_count, uleb128_value(header.complex_constants_count), uleb128_value(header.numeric_constants_count));
         }
-        
+            
         if (header.debuginfo_size_ > 0)
             DebugInfo debuginfo(uleb128_value(header.first_line_number), uleb128_value(header.lines_count), uleb128_value(header.instructions_count), header.debuginfo_size_, header.upvalues_count);
 
@@ -627,4 +820,167 @@ if (is_big_endian) {
     LittleEndian();
 }
 
+
+local uint16 modes[93];
+
+void init_modes() {
+    modes[0] = 0x3183;
+    modes[1] = 0x3183;
+    modes[2] = 0x3983;
+    modes[3] = 0x3983;
+    modes[4] = 0x2183;
+    modes[5] = 0x2183;
+    modes[6] = 0x2503;
+    modes[7] = 0x2503;
+    modes[8] = 0x2483;
+    modes[9] = 0x2483;
+    modes[10] = 0x2403;
+    modes[11] = 0x2403;
+    modes[12] = 0xb181;
+    modes[13] = 0xb181;
+    modes[14] = 0xb180;
+    modes[15] = 0xb180;
+    modes[16] = 0xb181;
+    modes[17] = 0xb181;
+    modes[18] = 0x8181;
+    modes[19] = 0x2981;
+    modes[20] = 0x5499;
+    modes[21] = 0x5c99;
+    modes[22] = 0x6499;
+    modes[23] = 0x6c99;
+    modes[24] = 0x7499;
+    modes[25] = 0x5499;
+    modes[26] = 0x5c99;
+    modes[27] = 0x6499;
+    modes[28] = 0x6c99;
+    modes[29] = 0x7499;
+    modes[30] = 0x5199;
+    modes[31] = 0x5999;
+    modes[32] = 0x6199;
+    modes[33] = 0x6999;
+    modes[34] = 0x7199;
+    modes[35] = 0x7999;
+    modes[36] = 0x4221;
+    modes[37] = 0xb501;
+    modes[38] = 0xb701;
+    modes[39] = 0xb381;
+    modes[40] = 0xb481;
+    modes[41] = 0xb401;
+    modes[42] = 0xb102;
+    modes[43] = 0xb281;
+    modes[44] = 0xb185;
+    modes[45] = 0xb505;
+    modes[46] = 0xb485;
+    modes[47] = 0xb405;
+    modes[48] = 0xb684;
+    modes[49] = 0x1601;
+    modes[50] = 0x1301;
+    modes[51] = 0x1581;
+    modes[52] = 0x501;
+    modes[53] = 0xd03;
+    modes[54] = 0x199;
+    modes[55] = 0x519;
+    modes[56] = 0x319;
+    modes[57] = 0x99b;
+    modes[58] = 0xd1b;
+    modes[59] = 0xb1b;
+    modes[60] = 0xc82;
+    modes[61] = 0x4b32;
+    modes[62] = 0x4b32;
+    modes[63] = 0x4b02;
+    modes[64] = 0x4b02;
+    modes[65] = 0x4b32;
+    modes[66] = 0x4b32;
+    modes[67] = 0xb332;
+    modes[68] = 0xb682;
+    modes[69] = 0xb302;
+    modes[70] = 0xb304;
+    modes[71] = 0xb304;
+    modes[72] = 0xb304;
+    modes[73] = 0xb682;
+    modes[74] = 0xb682;
+    modes[75] = 0xb682;
+    modes[76] = 0xb682;
+    modes[77] = 0xb302;
+    modes[78] = 0xb682;
+    modes[79] = 0xb682;
+    modes[80] = 0xb302;
+    modes[81] = 0xb684;
+    modes[82] = 0xb684;
+    modes[83] = 0xb304;
+    modes[84] = 0xb684;
+    modes[85] = 0xb004;
+    modes[86] = 0xb004;
+    modes[87] = 0xb304;
+    modes[88] = 0xb004;
+    modes[89] = 0xb004;
+    modes[90] = 0xb304;
+    modes[91] = 0xb004;
+    modes[92] = 0xb004;
+}
+
+uint16 get_mode(INSTRUCTION_OPCODES op) {
+    return modes[op];
+}
+
+BCMode get_mode_a(INSTRUCTION_OPCODES op) {
+    return get_mode(op) & 7;
+}
+
+BCMode get_mode_b(INSTRUCTION_OPCODES op) {
+    return (get_mode(op) >> 3) & 15;
+}
+
+BCMode get_mode_c(INSTRUCTION_OPCODES op) {
+    return (get_mode(op) >> 7) & 15;
+}
+
+int get_args_count(INSTRUCTION_OPCODES op) {
+    local int count = 0;
+    local BCMode ma = get_mode_a(op);
+    local BCMode mb = get_mode_b(op);
+    local BCMode mc = get_mode_c(op);
+    if (ma != BCMnone)
+        count++;
+    if (mb != BCMnone)
+        count++;
+    if (mc != BCMnone)
+        count++;
+    return count;
+}
+
+string get_data_from_constants(Instruction &inst, int idx) {
+    local string str = ComplexConstantRead(parentof(parentof(inst)).constants.constant[idx]);
+    if (str == "BCDUMP_KGC_CHILD")
+        return "0";
+    else
+        return str;
+}
+
+string process_operand(Instruction &inst, int complex_constants_count, BCMode operand_type, int operand, int pc) {
+    local string str;
+    if ((operand_type == BCMstr) || 
+            (operand_type == BCMtab) || 
+            (operand_type == BCMfunc) || 
+            (operand_type == BCMcdata)) {
+        local int idx = complex_constants_count - operand - 1;
+        SPrintf(str, "%d  ;  %s", idx, get_data_from_constants(inst, idx));
+    } else if (operand_type == BCMjump) {
+        SPrintf(str, "==> %04d", operand + pc - 0x7FFF);
+    } else {
+        SPrintf(str, "%d", operand);
+    }
+        return str;
+}
+
+init_modes();
+/*
+Printf("ADDVV mode:0x%x\n", get_mode(ADDVV));
+Printf("MOV mode:0x%x\n", get_mode(MOV));
+Printf("RET0 mode:0x%x\n", get_mode(RET0));
+
+Printf("get_args_count() ADDVV:0x%x\n", get_args_count(ADDVV));
+Printf("get_args_count() JFORL:0x%x\n", get_args_count(JFORL));
+Printf("get_args_count() FUNCV:0x%x\n", get_args_count(FUNCV));
+*/
 Luajit lj;
