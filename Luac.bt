@@ -1,0 +1,1055 @@
+//------------------------------------------------
+//--- 010 Editor v8.0 Binary Template
+//
+//      File: Luac.bt
+//   Authors: feicong
+//    E-mail: 346345565@qq.com
+//       Url: https://github.com/feicong/lua_re
+//   Version: 1.1
+//   Purpose: Parse lua bytecode .lua and .luac files, support lua 5.2. 
+//  Category: Programming
+// File Mask: *
+//  ID Bytes: 1B 4c 75 61
+//   History: 
+//      1.1   2017-10-28 feicong: add disassembler engine: InstructionRead().
+//      1.0   2017-10-12 feicong: Initial version, support lua 5.2.
+//
+//   License: This file is released into the public domain. People may 
+//          use it for any purpose, commercial or otherwise. 
+//------------------------------------------------
+
+
+// ~/git/lua-5.2/src/lopcodes.h
+enum <ubyte> OpCode {
+/*----------------------------------------------------------------------
+name		args	description
+------------------------------------------------------------------------*/
+OP_MOVE,/*	A B	R(A) := R(B)					*/
+OP_LOADK,/*	A Bx	R(A) := Kst(Bx)					*/
+OP_LOADKX,/*	A 	R(A) := Kst(extra arg)				*/
+OP_LOADBOOL,/*	A B C	R(A) := (Bool)B; if (C) pc++			*/
+OP_LOADNIL,/*	A B	R(A), R(A+1), ..., R(A+B) := nil		*/
+OP_GETUPVAL,/*	A B	R(A) := UpValue[B]				*/
+
+OP_GETTABUP,/*	A B C	R(A) := UpValue[B][RK(C)]			*/
+OP_GETTABLE,/*	A B C	R(A) := R(B)[RK(C)]				*/
+
+OP_SETTABUP,/*	A B C	UpValue[A][RK(B)] := RK(C)			*/
+OP_SETUPVAL,/*	A B	UpValue[B] := R(A)				*/
+OP_SETTABLE,/*	A B C	R(A)[RK(B)] := RK(C)				*/
+
+OP_NEWTABLE,/*	A B C	R(A) := {} (size = B,C)				*/
+
+OP_SELF,/*	A B C	R(A+1) := R(B); R(A) := R(B)[RK(C)]		*/
+
+OP_ADD,/*	A B C	R(A) := RK(B) + RK(C)				*/
+OP_SUB,/*	A B C	R(A) := RK(B) - RK(C)				*/
+OP_MUL,/*	A B C	R(A) := RK(B) * RK(C)				*/
+OP_DIV,/*	A B C	R(A) := RK(B) / RK(C)				*/
+OP_MOD,/*	A B C	R(A) := RK(B) % RK(C)				*/
+OP_POW,/*	A B C	R(A) := RK(B) ^ RK(C)				*/
+OP_UNM,/*	A B	R(A) := -R(B)					*/
+OP_NOT,/*	A B	R(A) := not R(B)				*/
+OP_LEN,/*	A B	R(A) := length of R(B)				*/
+
+OP_CONCAT,/*	A B C	R(A) := R(B).. ... ..R(C)			*/
+
+OP_JMP,/*	A sBx	pc+=sBx; if (A) close all upvalues >= R(A - 1)	*/
+OP_EQ,/*	A B C	if ((RK(B) == RK(C)) ~= A) then pc++		*/
+OP_LT,/*	A B C	if ((RK(B) <  RK(C)) ~= A) then pc++		*/
+OP_LE,/*	A B C	if ((RK(B) <= RK(C)) ~= A) then pc++		*/
+
+OP_TEST,/*	A C	if not (R(A) <=> C) then pc++			*/
+OP_TESTSET,/*	A B C	if (R(B) <=> C) then R(A) := R(B) else pc++	*/
+
+OP_CALL,/*	A B C	R(A), ... ,R(A+C-2) := R(A)(R(A+1), ... ,R(A+B-1)) */
+OP_TAILCALL,/*	A B C	return R(A)(R(A+1), ... ,R(A+B-1))		*/
+OP_RETURN,/*	A B	return R(A), ... ,R(A+B-2)	(see note)	*/
+
+OP_FORLOOP,/*	A sBx	R(A)+=R(A+2);
+			if R(A) <?= R(A+1) then { pc+=sBx; R(A+3)=R(A) }*/
+OP_FORPREP,/*	A sBx	R(A)-=R(A+2); pc+=sBx				*/
+
+OP_TFORCALL,/*	A C	R(A+3), ... ,R(A+2+C) := R(A)(R(A+1), R(A+2));	*/
+OP_TFORLOOP,/*	A sBx	if R(A+1) ~= nil then { R(A)=R(A+1); pc += sBx }*/
+
+OP_SETLIST,/*	A B C	R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B	*/
+
+OP_CLOSURE,/*	A Bx	R(A) := closure(KPROTO[Bx])			*/
+
+OP_VARARG,/*	A B	R(A), R(A+1), ..., R(A+B-2) = vararg		*/
+
+OP_EXTRAARG/*	Ax	extra (larger) argument for previous opcode	*/
+};
+
+#define LUADEC_TFORLOOP OP_TFORCALL
+#define LFIELDS_PER_FLUSH	50
+
+enum <uchar> LUA_DATATYPE {
+    LUA_TNIL		=     0,
+    LUA_TBOOLEAN	=	  1,
+    LUA_TLIGHTUSERDATA =  2,
+    LUA_TNUMBER		=     3,
+    LUA_TSTRING		=     4,
+    LUA_TTABLE		=     5,
+    LUA_TFUNCTION	=     6,
+    LUA_TUSERDATA	=     7,
+    LUA_TTHREAD		=     8,
+    LUA_NUMTAGS	     =    9,
+
+    LUA_TLCL        =	 (LUA_TFUNCTION | (0 << 4)),  /* Lua closure */
+    LUA_TLCF	    =    (LUA_TFUNCTION | (1 << 4)),  /* light C function */
+    LUA_TCCL	    =    (LUA_TFUNCTION | (2 << 4)),  /* C closure */
+
+    LUA_TSHRSTR	 =   (LUA_TSTRING | (0 << 4)),  /* short strings */
+    LUA_TLNGSTR	 =   (LUA_TSTRING | (1 << 4)),  /* long strings */
+
+    LUA_TNUMFLT	 =   (LUA_TNUMBER | (0 << 4)),  /* float numbers */
+    LUA_TNUMINT =	 (LUA_TNUMBER | (1 << 4))  /* integer numbers */
+};
+
+enum OpMode {iABC, iABx, iAsBx};  /* basic instruction format */
+
+#define SIZE_C		9
+#define SIZE_B		9
+#define SIZE_Bx		(SIZE_C + SIZE_B)
+#define SIZE_A		8
+#define SIZE_Ax		(SIZE_C + SIZE_B + SIZE_A)
+
+#define SIZE_OP		6
+
+#define POS_OP		0
+#define POS_A		(POS_OP + SIZE_OP)
+#define POS_C		(POS_A + SIZE_A)
+#define POS_B		(POS_C + SIZE_C)
+#define POS_Bx		POS_C
+#define POS_Ax		POS_A
+
+#define MAXARG_Bx        ((1<<SIZE_Bx)-1)
+#define MAXARG_sBx        (MAXARG_Bx>>1) 
+
+//forward declaration
+struct Proto;
+struct Inst;
+struct Code;
+
+/*
+** Macros to operate RK indices
+*/
+
+/* this bit 1 means constant (0 means register) */
+#define BITRK		(1 << (SIZE_B - 1))
+
+/* test whether value is a constant */
+//#define ISK(x)		((x) & BITRK)
+int ISK(int x) {
+    return ((x) & BITRK);
+}
+
+/* gets the index of the constant */
+//#define INDEXK(r)	((int)(r) & ~BITRK)
+int INDEXK(int r) {
+	return ((r) & ~BITRK);
+}
+
+#define MAXINDEXRK	(BITRK - 1)
+
+//#define CC(r) (ISK((r)) ? 'K' : 'R')
+int CC(int r) {
+    return (ISK((r)) ? 'K' : 'R');
+}
+
+//#define CV(r) (ISK((r)) ? INDEXK(r) : r)
+int CV(int r) {
+    return (ISK((r)) ? INDEXK(r) : r);
+}
+
+//TODO: update LUA_NUMBER & LUA_INTEGER length.
+#define LUA_NUMBER	double
+#define LUA_INTEGER	int64 //ptrdiff_t
+
+/* type of numbers in Lua */
+typedef LUA_NUMBER lua_Number;
+
+/* type for integer functions */
+typedef LUA_INTEGER lua_Integer;
+
+
+typedef struct {
+    int b <format=hex>;           /* booleans */
+    int tt_ <format=hex>;
+} lua_Val;
+
+typedef struct {
+    union Value {
+        //GCObject *gc;    /* collectable objects */
+        //void *p;         /* light userdata */
+        lua_Val val;           /* booleans */
+        //lua_CFunction f; /* light C functions */
+        lua_Integer i <format=hex>;   /* integer numbers */
+        lua_Number n <format=hex>;    /* float numbers */
+    } value_ <optimize=false>;
+} TValue <optimize=false>;
+
+typedef uint32 lu_int32;
+typedef lu_int32 Instruction;
+
+string RegOrConst(Proto &f, int r) {
+	if (ISK(r)) {
+		return DecompileConstant(f, INDEXK(r));
+	} else {
+		string tmp;
+		SPrintf(tmp, "R%d", r);
+		return tmp;
+	}
+}
+
+//#define RK(r) (RegOrConst(f, r))
+string RK(Proto &f, int r) {
+    return (RegOrConst(f, r));
+}
+
+//#define opstr(o) ((o)==OP_EQ?"==":(o)==OP_LE?"<=":(o)==OP_LT?"<":(((o)==OP_TEST)||((o)==OP_TESTSET))?NULL:"?") // Lua5.1 specific
+string opstr(OpCode o) {
+    return ((o)==OP_EQ?"==":(o)==OP_LE?"<=":(o)==OP_LT?"<":(((o)==OP_TEST)||((o)==OP_TESTSET))?NULL:"?");
+}
+
+//#define invopstr(o) ((o)==OP_EQ?"~=":(o)==OP_LE?">":(o)==OP_LT?">=":(((o)==OP_TEST)||((o)==OP_TESTSET))?"not":"?") // Lua5.1 specific
+string invopstr(OpCode o) {
+    return ((o)==OP_EQ?"~=":(o)==OP_LE?">":(o)==OP_LT?">=":(((o)==OP_TEST)||((o)==OP_TESTSET))?"not":"?");
+}
+
+
+
+#define MAXSTACK	250
+#define MAXCONSTSIZE 1024
+
+/* creates a mask with `n' 1 bits at position `p' */
+//#define MASK1(n,p)	((~((~(Instruction)0)<<(n)))<<(p))
+
+/* creates a mask with `n' 0 bits at position `p' */
+//#define MASK0(n,p)	(~MASK1(n,p))
+
+uchar GET_OPCODE(uint32 inst) {
+    return ((inst)>>POS_OP) & ((~((~(Instruction)0)<<(SIZE_OP)))<<(0));// ((i)>>POS_OP) & MASK1(SIZE_OP,0);
+}
+
+int GETARG_A(uint32 inst) {
+    return ((inst)>>POS_A) & ((~((~(Instruction)0)<<(SIZE_A)))<<(0));
+}
+
+int GETARG_B(uint32 inst) {
+    return ((inst)>>POS_B) & ((~((~(Instruction)0)<<(SIZE_B)))<<(0));
+}
+
+int GETARG_C(uint32 inst) {
+    return ((inst)>>POS_C) & ((~((~(Instruction)0)<<(SIZE_C)))<<(0));
+}
+
+int GETARG_Bx(uint32 inst) {
+    return ((inst)>>POS_Bx) & ((~((~(Instruction)0)<<(SIZE_Bx)))<<(0));
+}
+
+int GETARG_Ax(uint32 inst) {
+    return ((inst)>>POS_Ax) & ((~((~(Instruction)0)<<(SIZE_Ax)))<<(0));
+}
+
+int GETARG_sBx(uint32 inst) {
+    return GETARG_Bx(inst)-MAXARG_sBx;
+}
+
+typedef struct {
+    char signature[4] <format=hex>;   //".lua"
+    if (Memcmp(signature, "\033Lua", 4) != 0) {
+            Warning("Error signature.");
+    }
+    uchar version <format=hex>;
+    uchar format <comment = "format (0=official)">;
+    uchar endian <comment = "1 == LittleEndian; 0 == BigEndian">;
+    uchar size_int <comment = "sizeof(int)">;
+    uchar size_size_t <comment = "sizeof(size_t)">;
+    uchar size_Instruction <comment = "sizeof(Instruction)">;
+    uchar size_lua_Number <comment = "sizeof(lua_Number)">;
+    uchar lua_num_valid <comment = "Determine lua_Number whether it works or not, It's usually 0">;
+    if (version == 0x52) {
+        uchar luac_tail[0x6] <format=hex, comment = "data to catch conversion errors">;
+        if (Memcmp(luac_tail, "\x19\x93\r\n\x1a\n", 6) != 0) {
+            Warning("Error luac_tail.");
+        }
+    }
+} GlobalHeader;
+
+typedef struct {
+    LUA_DATATYPE const_type;
+    if (constant.const_type == LUA_TBOOLEAN) {
+        uchar bool_val;
+    } else if (const_type == LUA_TNUMBER) {
+        TValue num_val <format=hex>;
+    } else if (const_type == LUA_TSTRING) {
+        uint64 string_size <format=hex>;
+        char str_val[string_size];
+    } else if (const_type == LUA_TNIL) {
+    } else {
+        Warning("need update,const_type:%x\n", const_type);
+    }
+} Constant <read = ConstantRead, optimize=false>;
+
+string number2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local int tt = o.value_.val.tt_;
+    //Printf("tt:%x\n", tt);
+    local lua_Integer i = o.value_.i;
+    local lua_Number n = o.value_.n;
+    SPrintf(ret, "%.14g", ((tt == (3 | (1 << 4))) ? i : n));
+
+    return ret;
+}
+
+string numflt2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local lua_Number n = o.value_.n;
+    SPrintf(ret, "%.14g", n);
+
+    return ret;
+}
+
+string numint2str(TValue &o) {
+    local string ret;
+    local string fmt;
+    if (get_inst_sz() == 4) {
+        fmt = "(=%.7g)";
+    } else if (get_inst_sz() == 8) {
+        fmt = "(=%.14g)";
+    } else {
+        Warning("error inst size.\n");
+    }
+    local lua_Integer i = o.value_.i;
+    SPrintf(ret, "%.14g", i);
+
+    return ret;
+}
+
+string ConstantRead(Constant& constant) {
+    local string str;
+    switch (constant.const_type) {
+        case LUA_TBOOLEAN:
+        {
+            SPrintf(str, "%s", constant.bool_val ? "true" : "false");
+            return str;
+        }
+        case LUA_TNIL:
+        {
+            return "nil";
+        }
+        case LUA_TNUMBER:
+        {
+            return number2str(constant.num_val);
+        }
+        case LUA_TSTRING:
+        {
+            return "(=\"" + constant.str_val + "\")";
+        }
+        case LUA_TNUMFLT:
+        {
+            return numflt2str(constant.num_val);
+        }
+        case LUA_TNUMINT:
+        {
+            return numint2str(constant.num_val);
+        }
+        case LUA_TSHRSTR:
+        case LUA_TLNGSTR:
+        {
+            return "(=\"" + constant.str_val + "\")";
+        }
+        default:
+            return "";
+    }
+}
+
+typedef struct {
+    //uint64 name_size <format=hex>;
+    //char name[name_size];
+    uchar instack <comment="whether it is in stack (register)">;
+    uchar idx <comment="index of upvalue (in stack or in outer function's list)">;
+} Upvaldesc;
+
+typedef struct {
+    uint64 varname_size <format=hex>;
+    char varname[varname_size];
+    uint32 startpc <format=hex, comment="first point where variable is active">;
+    uint32 endpc <format=hex, comment="first point where variable is dead">;
+} LocVar <read = LocVarRead, optimize = false>;
+
+string LocVarRead(LocVar &val) {
+    return val.varname;
+}
+
+typedef struct {
+    uint32 sizek <format=hex>;
+    local uint32 sz = sizek;
+    while (sz-- > 0) {
+        Constant constant;
+    }
+} Constants <optimize=false>;
+
+string DecompileString(Constant& constant) {
+    return ConstantRead(constant);
+}
+
+/* clang -E test_lua_DecompileConstant.cpp -o out.txt
+char* DecompileConstant(const TValue* o, int i) {
+ char* ret = (char*)calloc(128, sizeof(char));
+ sprintf(ret, "%.14g", ((((((o))->tt_) == ((3 | (1 << 4)))) ? ((lua_Number)(((((o)->value_).i)))) : (((o)->value_).n))));
+ return ret;
+}
+*/
+string DecompileConstant(Proto& proto, int i) {
+    return ConstantRead(proto.constants.constant[i]);
+}
+
+typedef struct {
+    uint32 sizeupvalues <format=hex>;
+    local uint32 sz = sizeupvalues;
+    while (sz-- > 0) {
+        Upvaldesc upvalue;
+    }
+} Upvaldescs <optimize=false>;
+
+string get_opcode_str(OpCode o) {
+    string str = EnumToString(o);
+    str = SubStr(str, 3);
+    /*
+    int i=0;
+    for(i=0; i<Strlen(str); i++) {
+        str[i] = ToLower(str[i]);
+    }
+    */
+    return str;
+}
+
+#define NUM_OPCODES     ((int)OP_EXTRAARG + 1)
+//string operators[NUM_OPCODES];
+string operators(OpCode o) {
+    local string str;
+    switch (o) {
+        case OP_POW:
+            str = "^";
+            break;
+        case OP_NOT:
+            str = "not ";
+            break;
+        case OP_LEN:
+            str = "#";
+            break;
+        case OP_UNM:
+            str = "-";
+            break;
+        case OP_MUL:
+            str = "*";
+            break;
+        case OP_DIV:
+            str = "/";
+            break;
+        case OP_MOD:
+            str = "%";
+            break;
+        case OP_ADD:
+            str = "+";
+            break;
+        case OP_SUB:
+            str = "-";
+            break;
+        case OP_CONCAT:
+            str = "..";
+            break;
+        default:
+            str = " ";
+            break;
+    }
+    //Printf("operators: %s str:%s\n", EnumToString(o), str);
+    return str;
+}
+
+//int priorities[NUM_OPCODES];
+int priorities(OpCode o) {
+    local int ret;
+    switch (0) {
+        case OP_POW:
+            ret = 1;
+            break;
+        case OP_NOT:
+            ret = 2;
+            break;
+        case OP_LEN:
+            ret = 2;
+            break;
+        case OP_UNM:
+            ret = 2;
+            break;
+        case OP_MUL:
+            ret = 3;
+            break;
+        case OP_DIV:
+            ret = 3;
+            break;
+        case OP_MOD:
+            ret = 3;
+            break;
+        case OP_ADD:
+            ret = 4;
+            break;
+        case OP_SUB:
+            ret = 4;
+            break;
+        case OP_CONCAT:
+            ret = 5;
+            break;
+        default:
+            ret = 0;
+            break;
+    }
+    return ret;
+}
+
+// luadec_disassemble() from luadec disassemble.c
+string InstructionRead(Inst &inst) {
+    local int i = inst.inst;
+    OpCode o = (OpCode)GET_OPCODE(i);
+    /*
+    Printf("inst: 0x%x\n", o);
+    */
+    local int a = GETARG_A(i);
+	local int b = GETARG_B(i);
+	local int c = GETARG_C(i);
+	local int bc = GETARG_Bx(i);
+	local int sbc = GETARG_sBx(i);
+    local int dest;
+    local string line;
+    local string lend;
+    local string tmpconstant1;
+    local string tmpconstant2;
+    local string tmp;
+    local string tmp2;
+    local uchar lua_version_num = get_lua_version();
+    local int pc = inst.pc_;
+
+    //Printf("opcode:%x, a:%x, b:%x, c:%x, bx:%x, sbx:%d\n", o, a, b, c, bc, sbc);
+    //Printf("Inst: %s\n", EnumToString(o));
+    switch (o) {
+        case OP_MOVE:
+			/*	A B	R(A) := R(B)					*/
+			SPrintf(line,"R%d R%d",a,b);
+			SPrintf(lend,"R%d := R%d",a,b);
+			break;
+        case OP_LOADK:
+			/*	A Bx	R(A) := Kst(Bx)					*/
+			SPrintf(line,"R%d K%d",a,bc);
+            //Printf("OP_LOADK bc:%d\n", bc);
+			tmpconstant1 = DecompileConstant(parentof(parentof(inst)),bc);
+			SPrintf(lend,"R%d := %s",a,tmpconstant1);
+			break;
+        case OP_LOADKX:
+		{
+			/*	A 	R(A) := Kst(extra arg)				*/
+			int ax = GETARG_Ax(parentof(inst).inst[pc+1].inst);
+			SPrintf(line,"R%d",a);
+			tmpconstant1 = DecompileConstant(f,ax);
+			SPrintf(lend,"R%d := K%d , %s",a,ax,tmpconstant1);
+			break;
+		}
+		case OP_EXTRAARG:
+		{
+			/*	Ax	extra (larger) argument for previous opcode	*/
+			int ax = GETARG_Ax(i);
+			SPrintf(line,"%d",ax);
+			break;
+		}
+		case OP_LOADBOOL:
+        {
+			/*	A B C	R(A) := (Bool)B; if (C) pc++			*/
+			SPrintf(line,"R%d %d %d",a,b,c);
+			if (c) {
+				SPrintf(lend,"R%d := %s; goto %d",a,(b?"true":"false"),pc+2);
+			} else {
+				SPrintf(lend,"R%d := %s",a,(b?"true":"false"));
+			}
+			break;
+        }
+		case OP_LOADNIL:
+		{
+			/*	A B	R(A), ..., R(A+B) := nil		*/
+			int rb = a + b;
+			SPrintf(line, "R%d %d", a, b);
+			if (rb > a) {
+				SPrintf(lend, "R%d to R%d := nil", a, rb);
+			} else if (rb <= a) {
+				SPrintf(lend, "R%d := nil", rb);
+			}
+			break;
+		}
+		case OP_VARARG:
+        {
+			/*	A B	R(A), R(A+1), ..., R(A+B-2) = vararg		*/
+			// lua-5.1 and ANoFrillsIntroToLua51VMInstructions.pdf are wrong
+			SPrintf(line, "R%d %d", a, b);
+			if (b > 2) {
+				SPrintf(lend, "R%d to R%d := ...", a, a+b-2);
+			} else if (b == 2) {
+				SPrintf(lend, "R%d := ...", a);
+			} else if (b == 0) {
+				SPrintf(lend, "R%d to top := ...", a);
+			}
+			break;
+        }
+		case OP_GETUPVAL:
+        {
+			/*	A B	R(A) := UpValue[B]				*/
+			SPrintf(line,"R%d U%d",a,b);
+			SPrintf(lend,"R%d := U%d",a,b);
+			break;
+        }
+        case OP_GETTABUP:
+        {
+			/*	A B C	R(A) := UpValue[B][RK(C)]			*/
+			SPrintf(line,"R%d U%d %c%d",a,b,CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"R%d := U%d[%s]",a,b,tmpconstant1);
+			break;
+        }
+		case OP_GETTABLE:
+        {
+			/*	A B C	R(A) := R(B)[RK(C)]				*/
+			SPrintf(line,"R%d R%d %c%d",a,b,CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"R%d := R%d[%s]",a,b,tmpconstant1);
+			break;
+        }
+        case OP_SETTABUP:
+        {
+			/*	A B C	UpValue[A][RK(B)] := RK(C)			*/
+			SPrintf(line,"U%d %c%d %c%d",a,CC(b),CV(b),CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), b);
+			tmpconstant2 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"U%d[%s] := %s",a,tmpconstant1,tmpconstant2);
+			break;
+        }
+		case OP_SETUPVAL:
+        {
+			/*	A B	UpValue[B] := R(A)				*/
+			SPrintf(line,"R%d U%d",a,b);
+			SPrintf(lend,"U%d := R%d",b,a);
+			break;
+        }
+		case OP_SETTABLE:
+        {
+			/*	A B C	R(A)[RK(B)] := RK(C)				*/
+			SPrintf(line,"R%d %c%d %c%d",a,CC(b),CV(b),CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), b);
+			tmpconstant2 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"R%d[%s] := %s",a,tmpconstant1,tmpconstant2);
+			break;
+        }
+		case OP_NEWTABLE:
+        {
+			/*	A B C	R(A) := {} (size = B,C)				*/
+			SPrintf(line,"R%d %d %d",a,b,c);
+			SPrintf(lend,"R%d := {} (array_size= %d, hash_size=%d)",a,b,c);
+			break;
+        }
+		case OP_SELF:
+        {
+			/*	A B C	R(A+1) := R(B); R(A) := R(B)[RK(C)]		*/
+			SPrintf(line,"R%d R%d %c%d",a,b,CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"R%d := R%d; R%d := R%d[%s]",a+1,b,a,b,tmpconstant1);
+			break;
+        }
+		case OP_ADD:
+			/*	A B C	R(A) := RK(B) + RK(C)				*/
+		case OP_SUB:
+			/*	A B C	R(A) := RK(B) - RK(C)				*/
+		case OP_MUL:
+			/*	A B C	R(A) := RK(B) * RK(C)				*/
+		case OP_DIV:
+			/*	A B C	R(A) := RK(B) / RK(C)				*/
+		case OP_POW:
+			/*	A B C	R(A) := RK(B) % RK(C)				*/
+		case OP_MOD:
+        {
+			/*	A B C	R(A) := RK(B) ^ RK(C)				*/
+			SPrintf(line,"R%d %c%d %c%d",a,CC(b),CV(b),CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), b);
+			tmpconstant2 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"R%d := %s %s %s",a,tmpconstant1,operators(o),tmpconstant2);
+			break;
+        }
+		case OP_UNM:
+			/*	A B	R(A) := -R(B)					*/
+		case OP_NOT:
+			/*	A B	R(A) := not R(B)				*/
+		case OP_LEN:
+        {
+			/*	A B	R(A) := length of R(B)				*/
+			SPrintf(line,"R%d R%d",a,b);
+			SPrintf(lend,"R%d := %sR%d",a,operators(o),b);
+			break;
+        }
+		case OP_CONCAT:
+        {
+			/*	A B C	R(A) := R(B).. ... ..R(C)			*/
+			SPrintf(line,"R%d R%d R%d",a,b,c);
+			SPrintf(lend,"R%d := concat(R%d to R%d)",a,b,c);
+			break;
+        }
+		case OP_JMP:
+        {
+			/*	sBx	pc+=sBx					*/
+			dest = pc + sbc + 1;
+			SPrintf(line, "%d", sbc);
+			SPrintf(lend, "PC += %d (goto %d)", sbc, dest);
+			// instead OP_CLOSE in 5.2 : if (A) close all upvalues >= R(A-1)
+			// lua-5.2/src/lopcodes.h line 199 is wrong. See lua-5.2/src/lvm.c line 504:
+			// if (a > 0) luaF_close(L, ci->u.l.base + a - 1);
+			SPrintf(line, "R%d %d", a, sbc);
+			if (a>0) {
+				SPrintf(lend," close all upvalues in R%d to top",a-1);
+			}
+			break;
+        }
+		case OP_EQ:
+			/*	A B C	if ((RK(B) == RK(C)) ~= A) then pc++		*/
+		case OP_LT:
+			/*	A B C	if ((RK(B) <  RK(C)) ~= A) then pc++  		*/
+		case OP_LE:
+        {
+			/*	A B C	if ((RK(B) <= RK(C)) ~= A) then pc++  		*/
+			dest = GETARG_sBx(parentof(inst).inst[pc+1].inst) + pc + 2;
+			SPrintf(line,"%d %c%d %c%d",a,CC(b),CV(b),CC(c),CV(c));
+			tmpconstant1 = RK(parentof(parentof(inst)), b);
+			tmpconstant2 = RK(parentof(parentof(inst)), c);
+			SPrintf(lend,"if %s %s %s then goto [%d] else goto [%d]",tmpconstant1,(a?invopstr(o):opstr(o)),tmpconstant2,pc+2,dest);
+			break;
+        }
+		case OP_TEST:
+        {
+			/*	A C	if not (R(A) <=> C) then pc++			*/
+			dest = GETARG_sBx(parentof(inst).inst[pc+1].inst) + pc + 2;
+			SPrintf(line,"R%d %d",a,c);
+			SPrintf(lend,"if %sR%d then goto %d else goto %d",(c?"not ":""),a,pc+2,dest);
+			break;
+        }
+		case OP_TESTSET:
+        {
+			/*	A B C	if (R(B) <=> C) then R(A) := R(B) else pc++	*/ 
+			dest = GETARG_sBx(parentof(inst).inst[pc+1].inst) + pc + 2;
+			SPrintf(line,"R%d R%d %d",a,b,c);
+			SPrintf(lend,"if %sR%d then R%d := R%d ; goto %d else goto %d",(c?"":"not "),b,a,b,dest,pc+2);
+			break;
+        }
+		case OP_CALL:
+			/*	A B C	R(A), ... ,R(A+C-2) := R(A)(R(A+1), ... ,R(A+B-1)) */
+		case OP_TAILCALL:
+        {
+			/*	A B C	return R(A)(R(A+1), ... ,R(A+B-1))		*/
+			SPrintf(line,"R%d %d %d",a,b,c);
+			if (b>2) {
+				SPrintf(tmp,"R%d to R%d", a+1, a+b-1);
+			} else if (b==2) {
+				SPrintf(tmp,"R%d", a+1);
+			} else if (b==1) {
+				SPrintf(tmp,"");
+			} else if (b==0) {
+				SPrintf(tmp,"R%d to top",a+1);
+			}
+
+			if (c>2) {
+				SPrintf(tmp2, "R%d to R%d", a, a+c-2);
+			} else if (c==2) {
+				SPrintf(tmp2,"R%d",a);
+			} else if (c==1) {
+				SPrintf(tmp2,"");
+			} else if (c==0) {
+				SPrintf(tmp2,"R%d to top",a);
+			}
+			SPrintf(lend,"%s := R%d(%s)",tmp2,a,tmp);
+			break;
+        }
+		case OP_RETURN:
+        {
+			/*	A B	return R(A), ... ,R(A+B-2)	(see note)	*/
+			SPrintf(line,"R%d %d",a,b);
+			if (b > 2) {
+				SPrintf(tmp, "R%d to R%d", a, a+b-2);
+			} else if (b == 2) {
+				SPrintf(tmp, "R%d", a);
+			} else if (b == 1) {
+				SPrintf(tmp, "");
+			} else if (b == 0) {
+				SPrintf(tmp, "R%d to top", a);
+			}
+
+			SPrintf(lend,"return %s",tmp);
+			break;
+        }
+		case OP_FORLOOP:
+        {
+			/*	A sBx	R(A)+=R(A+2);
+				if R(A) <?= R(A+1) then { pc+=sBx; R(A+3)=R(A) }*/
+			dest = pc + sbc + 1;
+			SPrintf(line, "R%d %d", a, sbc);
+			SPrintf(lend, "R%d += R%d; if R%d <= R%d then R%d := R%d; PC += %d , goto %d end", a, a+2, a, a+1, a+3, a, sbc, dest);
+			break;
+        }
+		case OP_FORPREP:
+        {
+			/*	A sBx	R(A)-=R(A+2); pc+=sBx				*/
+			SPrintf(line,"R%d %d",a,sbc);
+			SPrintf(lend,"R%d -= R%d; pc += %d (goto %d)",a,a+2,sbc,pc+sbc+1);
+			break;
+        }
+		case LUADEC_TFORLOOP:
+        {
+			/*	A C	R(A+3), ... ,R(A+2+C) := R(A)(R(A+1), R(A+2));	*/
+			SPrintf(line,"R%d %d",a,c);
+			if (c == 1) {
+				SPrintf(tmp2, "R%d", a+3);
+			}else if (c>1) {
+				SPrintf(tmp2, "R%d to R%d", a+3, a+c+2);
+			} else {
+				SPrintf(tmp2,"ERROR c=0");
+			}
+			SPrintf(lend, "%s := R%d(R%d,R%d)", tmp2, a, a+1, a+2);
+			break;
+        }
+        case OP_TFORLOOP:
+        {
+			/*	A sBx	if R(A+1) ~= nil then { R(A)=R(A+1); pc += sBx }*/
+			dest = pc + sbc + 1;
+			SPrintf(line,"R%d %d",a,sbc);
+			SPrintf(lend,"if R%d ~= nil then { R%d := R%d ; pc += %d (goto %d) }",a+1,a, a+1, sbc, dest);
+			break;
+        }
+        case OP_SETLIST:
+		{
+			/*	A B C	R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B	*/
+			int next_is_extraarg = 1;
+			uint32 realc = c, startindex;
+			if (c == 0) {
+				int i_next_arg = parentof(inst).inst[pc + 1].inst;
+				if (GET_OPCODE(i_next_arg) == OP_EXTRAARG) {
+					realc = GETARG_Ax(i_next_arg);
+				} else {
+					next_is_extraarg = 0;
+				}
+			}
+			startindex = (realc - 1)*LFIELDS_PER_FLUSH;
+			SPrintf(line, "R%d %d %d", a, b, c);
+			if (b == 0) {
+				SPrintf(lend, "R%d[%d] to R%d[top] := R%d to top", a, startindex, a, a + 1);
+			} else if (b == 1) {
+				SPrintf(lend, "R%d[%d] := R%d", a, startindex, a + 1);
+			} else if (b > 1) {
+				SPrintf(lend, "R%d[%d] to R%d[%d] := R%d to R%d", a, startindex, a, startindex + b - 1, a + 1, a + b);
+			}
+            
+			if (c != 0) {
+				SPrintf(lend, "%s; R(a)[(c-1)*FPF+i] := R(a+i), 1 <= i <= b, a=%d, b=%d, c=%d, FPF=%d", lend, a, b, c, LFIELDS_PER_FLUSH);
+			} else {
+				SPrintf(lend, "%s; R(a)[(realc-1)*FPF+i] := R(a+i), 1 <= i <= b, a=%d, b=%d, c=%d, realc=%u, FPF=%d", lend, a, b, c, realc, LFIELDS_PER_FLUSH);
+				if (!next_is_extraarg) {
+					Strcat(lend, " ; Error: SETLIST with c==0, but not followed by EXTRAARG.");
+				}
+				if (realc == 0) {
+					Strcat(lend, " ; Error: SETLIST with c==0, but realc==0.");
+				}
+			}
+			break;
+		}
+        case OP_CLOSURE:
+        {
+			/*	A Bx	R(A) := closure(KPROTO[Bx])		*/
+			SPrintf(line,"R%d %d",a,bc);
+			SPrintf(lend, "R%d := closure(Function #%d)", a, bc);
+			break;
+        }
+		default:
+			break;
+
+    }
+
+    local string ss;
+    SPrintf(ss, "[%d] %-9s %-13s; %s\n", pc, get_opcode_str(o),line,lend);
+
+    return ss;
+}
+
+
+
+typedef struct {
+    uint32 linedefined <format=hex>;
+    uint32 lastlinedefined <format=hex>;
+    uchar numparams <format=hex>;
+    uchar is_vararg;
+    uchar maxstacksize <format=hex>;
+} ProtoHeader;
+
+typedef struct(string level) {
+    uint32 sizep <format=hex>;
+    local uint32 sz = sizep;
+    local uint32 i = 0;
+    local string s_level;
+    while (sz-- > 0) {
+        SPrintf(s_level, "%s_%d", level, i++);
+        Proto proto(s_level);
+    };
+} Protos <optimize=false>;
+
+typedef struct {
+    uint32 sizelineinfo <format=hex>;
+    local uint32 sz = sizelineinfo;
+    while (sz-- > 0) {
+        uint32 line;
+    };
+} Lines <optimize=false>;
+
+typedef struct {
+    uint64 src_string_size <format=hex>;
+    char str[src_string_size];
+} SourceName <read = SourceNameRead>;
+
+string SourceNameRead(SourceName &name) {
+    return name.str;
+}
+
+typedef struct {
+    uint32 sizelocvars;
+    local uint32 sz = sizelocvars;
+    while (sz-- > 0) {
+        LocVar local_var;
+    };
+} LocVars <optimize=false>;
+
+typedef struct {
+    uint64 name_size <format=hex>;
+    char var_str[name_size];
+} UpValueName <read = UpValueNameRead, optimize=false>;
+
+string UpValueNameRead(UpValueName& name) {
+    return name.var_str;
+}
+
+typedef struct {
+    uint32 size_upvalue_names <format=hex>;
+    local uint32 sz = size_upvalue_names;
+    while (sz-- > 0) {
+        UpValueName upvalue_name;
+    }
+} UpValueNames <optimize=false>;
+
+typedef struct(string level) {
+    local string level_ = level;
+    //Printf("level:%s\n", level_);
+
+    //header
+    ProtoHeader header;
+
+    //code
+    //Code code;
+    struct Code {
+        uint32 sizecode <format=hex>;
+        local uchar inst_sz = get_inst_sz();
+        local int pc = 1;
+        if (inst_sz == 4) {
+            local uint32 sz = sizecode;
+            while (sz-- > 0) {
+                Inst inst(pc);
+                pc++;
+            }
+        } else {
+            Warning("Error size_Instruction.");
+        }
+        
+        typedef struct(int pc) {
+            local int pc_ = pc;
+            local uchar inst_sz = get_inst_sz();
+            if (inst_sz == 4) {
+                uint32 inst;
+            } else {
+                Warning("Error size_Instruction.");
+            }
+        } Inst <read=InstructionRead, optimize=false>;
+    
+    } code <optimize=false>;
+
+    // constants
+    Constants constants;
+
+    // functions
+    Protos protos(level_);
+
+    // upvalues
+    Upvaldescs upvaldescs;
+
+    // string
+    SourceName src_name;
+
+    // lines
+    Lines lines;
+    
+    // locals
+    LocVars loc_vars;
+    
+    // upvalue names
+    UpValueNames names;
+} Proto <read=ProtoRead>;
+
+string ProtoRead(Proto& proto) {
+    return "function level " + proto.level_;
+}
+
+uchar get_inst_sz() {
+    return luac.header.size_Instruction;
+    //return ReadByte(9);
+}
+
+uchar get_lua_version() {
+    return luac.header.version;
+}
+
+typedef struct {
+    GlobalHeader header;
+    Proto proto("0");
+} Luac;
+
+////////////////////////////////start from here//////////////////
+// $ luac -o ~/Desktop/allopcodes52.luac ~/git/luadec/bin/allopcodes-5.2.lua
+// $ lua ~/git/luadec/ChunkSpy/ChunkSpy52.lua --auto --source ~/Desktop/allopcodes52.luac
+local char endian = ReadByte(6);
+//Printf("Endian:%d\n", endian);
+
+if (endian == 1) {
+    LittleEndian();
+} else if(0 == endian) {
+    BigEndian();
+} else {
+    Warning("Error endian.");
+}
+
+Luac luac;

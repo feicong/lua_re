@@ -1,0 +1,986 @@
+//------------------------------------------------
+//--- 010 Editor v8.0 Binary Template
+//
+//      File: LuaJit.bt
+//   Authors: feicong
+//    E-mail: 346345565@qq.com
+//       Url: https://github.com/feicong/lua_re
+//   Version: 1.1
+//   Purpose: Parse luajit bytecode files, support luajit 2.0.5. 
+//  Category: Programming
+// File Mask: *
+//  ID Bytes: 1B 4C 4A
+//   History: 
+//      1.1   2017-12-11 feicong: Add disassembler engine: InstructionRead().
+//      1.0   2017-10-12 feicong: Initial version, support luajit 2.0.5.
+//
+//   License: This file is released into the public domain. People may 
+//          use it for any purpose, commercial or otherwise. 
+//------------------------------------------------
+
+typedef enum<uchar> {
+    _FLAG_IS_BIG_ENDIAN = 0b00000001,
+    _FLAG_IS_STRIPPED = 0b00000010,
+    _FLAG_HAS_FFI = 0b00000100
+} FLAG;
+
+typedef enum<uchar> {
+    FLAG_HAS_CHILD = 0b00000001,
+    FLAG_IS_VARIADIC = 0b00000010,
+    FLAG_HAS_FFI = 0b00000100,
+    FLAG_JIT_DISABLED = 0b00001000,
+    FLAG_HAS_ILOOP = 0b00010000
+} PROTO_FLAG;
+
+typedef enum<uchar> {
+    VARNAME_END = 0,
+    VARNAME_FOR_IDX = 1,
+    VARNAME_FOR_STOP = 2,
+    VARNAME_FOR_STEP = 3,
+    VARNAME_FOR_GEN = 4,
+    VARNAME_FOR_STATE = 5,
+    VARNAME_FOR_CTL = 6,
+    VARNAME__MAX = 7
+} VARNAME_TYPE;
+
+typedef enum<uchar> {
+    BCDUMP_KGC_CHILD = 0,
+    BCDUMP_KGC_TAB = 1,
+    BCDUMP_KGC_I64 = 2,
+    BCDUMP_KGC_U64 = 3,
+    BCDUMP_KGC_COMPLEX = 4,
+    BCDUMP_KGC_STR = 5
+} BCDUMP_KGC_TYPE;
+
+typedef enum<uchar> {
+    BCDUMP_KTAB_NIL = 0,
+    BCDUMP_KTAB_FALSE = 1,
+    BCDUMP_KTAB_TRUE = 2,
+    BCDUMP_KTAB_INT = 3,
+    BCDUMP_KTAB_NUM = 4,
+    BCDUMP_KTAB_STR = 5
+} BCDUMP_KTAB_TYPE;
+
+/* Bytecode instruction format, 32 bit wide, fields of 8 or 16 bit:
+**
+** +----+----+----+----+
+** | B  | C  | A  | OP | Format ABC
+** +----+----+----+----+
+** |    D    | A  | OP | Format AD
+** +--------------------
+** MSB               LSB
+**
+** In-memory instructions are always stored in host byte order.
+*/
+
+typedef enum<uchar> {
+    ISLT = 0,
+    ISGE,
+    ISLE,
+    ISGT,
+    ISEQV,
+    ISNEV,
+    ISEQS,
+    ISNES,
+    ISEQN,
+    ISNEN,
+    ISEQP,
+    ISNEP,
+    ISTC,
+    ISFC,
+    IST,
+    ISF,
+    MOV,
+    NOT,
+    UNM,
+    LEN,
+    ADDVN,
+    SUBVN,
+    MULVN,
+    DIVVN,
+    MODVN,
+    ADDNV,
+    SUBNV,
+    MULNV,
+    DIVNV,
+    MODNV,
+    ADDVV,
+    SUBVV,
+    MULVV,
+    DIVVV,
+    MODVV,
+    POW,
+    CAT,
+    KSTR,
+    KCDATA,
+    KSHORT,
+    KNUM,
+    KPRI,
+    KNIL,
+    UGET,
+    USETV,
+    USETS,
+    USETN,
+    USETP,
+    UCLO,
+    FNEW,
+    TNEW,
+    TDUP,
+    GGET,
+    GSET,
+    TGETV,
+    TGETS,
+    TGETB,
+    TSETV,
+    TSETS,
+    TSETB,
+    TSETM,
+    CALLM,
+    CALL,
+    CALLMT,
+    CALLT,
+    ITERC,
+    ITERN,
+    VARG,
+    ISNEXT,
+    RETM,
+    RET,
+    RET0,
+    RET1,
+    FORI,
+    JFORI,
+    FORL,
+    IFORL,
+    JFORL,
+    ITERL,
+    IITERL,
+    JITERL,
+    LOOP,
+    ILOOP,
+    JLOOP,
+    JMP,
+    FUNCF,
+    IFUNCF,
+    JFUNCF,
+    FUNCV,
+    IFUNCV,
+    JFUNCV,
+    FUNCC,
+    FUNCCW
+} INSTRUCTION_OPCODES;
+
+typedef enum<uchar> {
+    BCMnone=0, 
+    BCMdst, 
+    BCMbase, 
+    BCMvar, 
+    BCMrbase, 
+    BCMuv,
+    BCMlit, 
+    BCMlits, 
+    BCMpri, 
+    BCMnum, 
+    BCMstr, 
+    BCMtab, 
+    BCMfunc, 
+    BCMjump, 
+    BCMcdata,
+    BCM_max
+} BCMode;
+
+typedef enum<uchar> {
+    MM_index=0, MM_newindex, MM_gc, MM_mode, MM_eq, MM_len, MM_lt, MM_le, MM_concat, MM_call, MM_add, MM_sub, MM_mul, MM_div, MM_mod, MM_pow, MM_unm, MM_metatable, MM_tostring, MM_new, MM_pairs, MM_ipairs,
+
+   MM__MAX,
+   MM____ = MM__MAX,
+   MM_FAST = MM_len
+ } MMS;
+
+
+typedef struct {
+    ubyte val <comment="uleb128 element">;
+    if(val > 0x7f) {
+        ubyte val <comment="uleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="uleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="uleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="uleb128 element">;
+                }
+            }
+        }
+    }
+} uleb128 <read=ULeb128Read, comment="Unsigned little-endian base 128 value">;
+
+typedef struct {
+    ubyte val;
+    if((val >> 1) > 0x3f) {
+        ubyte val <comment="uleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="uleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="uleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="uleb128 element">;
+                }
+            }
+        }
+    }
+} uleb128_33 <read=uleb128_33Read>;
+
+int uleb128_33_value(uleb128_33 &u) {
+    local uint result;
+    local ubyte cur;
+
+    result = (u.val[0] >> 0x1);
+    if(result > 0x3f) {
+        cur = u.val[1];
+        result = (result & 0x3f) | (uint)((cur & 0x7f) << 6);
+        if(cur > 0x7f) {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 13;
+            if(cur > 0x7f) {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 20;
+                if(cur > 0x7f) {
+                    cur = u.val[4];
+                    result |= (uint)cur << 27;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+string uleb128_33Read(uleb128_33 &u) {
+    local string s;
+    s = SPrintf(s, "0x%X", uleb128_33_value(u));
+    return s;
+}
+
+// get the actual uint value of the uleb128
+uint uleb128_value(uleb128 &u) {
+    local uint result;
+    local ubyte cur;
+
+    result = u.val[0];
+    if(result > 0x7f) {
+        cur = u.val[1];
+        result = (result & 0x7f) | (uint)((cur & 0x7f) << 7);
+        if(cur > 0x7f) {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 14;
+            if(cur > 0x7f) {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 21;
+                if(cur > 0x7f) {
+                    cur = u.val[4];
+                    result |= (uint)cur << 28;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+typedef struct uleb128 uleb128p1;
+
+int uleb128p1_value(uleb128 &u) {
+    return (int)uleb128_value(u) - 1;
+}
+
+string ULeb128Read(uleb128 &u) {
+    local string s;
+    s = SPrintf(s, "0x%X", uleb128_value(u));
+    return s;
+}
+
+// sleb128
+typedef struct {
+    ubyte val <comment="sleb128 element">;
+    if(val > 0x7f) {
+        ubyte val <comment="sleb128 element">;
+        if (val > 0x7f) {
+            ubyte val <comment="sleb128 element">;
+            if(val > 0x7f) {
+                ubyte val <comment="sleb128 element">;
+                if(val > 0x7f) {
+                    ubyte val <comment="sleb128 element">; 
+                }
+            }
+        }
+    }
+} sleb128 <read=SLeb128Read, comment="Signed little-endian base 128 value">;
+
+// get the actual uint value of the uleb128
+int sleb128_value(sleb128 &u) {
+    local int result;
+    local ubyte cur;
+
+    result = u.val[0];
+    if(result <= 0x7f) {
+        result = (result << 25) >> 25;
+    } else {
+        cur = u.val[1];
+        result = (result & 0x7f) | ((uint)(cur & 0x7f) << 7);
+        if(cur <= 0x7f) {
+            result = (result << 18) >> 18;
+        } else {
+            cur = u.val[2];
+            result |= (uint)(cur & 0x7f) << 14;
+            if(cur <= 0x7f) {
+                result = (result << 11) >> 11;
+            } else {
+                cur = u.val[3];
+                result |= (uint)(cur & 0x7f) << 21;
+                if(cur <= 0x7f) {
+                    result = (result << 4) >> 4;
+                } else {
+                    cur = u.val[4];
+                    result |= (uint)cur << 28;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+string SLeb128Read(sleb128 &u) {
+    local string s;
+    s = SPrintf(s, "%i", sleb128_value(u));
+    return s;
+}
+
+typedef struct {
+    uleb128 lo;
+    uleb128 hi;
+} TNumber <read=TNumberRead, optimize=false>;
+
+string TNumberRead(TNumber &num) {
+    local string str;
+    local int i_lo = uleb128_value(num.lo);
+    local int i_hi = uleb128_value(num.hi);
+    //Printf("lo: 0x%lx\n", i_lo);
+    //Printf("hi: 0x%lx\n", i_hi);
+    local uchar bytes_lo[4];
+    local uchar bytes_hi[4];
+    local uchar bytes_double[8];
+    ConvertDataToBytes(i_lo, bytes_lo);
+    ConvertDataToBytes(i_hi, bytes_hi);
+    Memcpy(bytes_double, bytes_lo, 4);
+    Memcpy(bytes_double, bytes_hi, 4, 4);
+    
+    local double n = ConvertBytesToDouble(bytes_double);
+    //Printf("n:%.14g\n", n);
+    SPrintf(str, "%.14g", ((uleb128_value(num.hi) == (3 | (1 << 4))) ? 
+        i : 
+        n));
+    return str;
+}
+
+typedef struct {
+    uleb128 tp;
+    local int32 data_type = uleb128_value(tp);
+    if (data_type >= BCDUMP_KTAB_STR) {
+        local int32 len = data_type - BCDUMP_KTAB_STR;
+        char str[len];
+    } else if (data_type == BCDUMP_KTAB_INT) {
+        uleb128 val;
+    } else if (data_type == BCDUMP_KTAB_NUM) {
+        TNumber num;
+    } else if (data_type == BCDUMP_KTAB_TRUE) {
+    } else if (data_type == BCDUMP_KTAB_FALSE) {
+    } else if (data_type == BCDUMP_KTAB_NIL) {
+    } else {
+        Warning("TableItem need update\n");
+    }
+} TableItem <read=TableItemRead, optimize=false>;
+
+string TableItemRead(TableItem &item) {
+    if (item.data_type >= BCDUMP_KTAB_STR) {
+        return item.str;
+    } else if (item.data_type == BCDUMP_KTAB_INT) {
+        local string str;
+        SPrintf(str, "%ld", uleb128_value(item.val));
+        return str;
+    } else if (item.data_type == BCDUMP_KTAB_NUM) {
+        return TNumberRead(item.num);
+    } else if (item.data_type == BCDUMP_KTAB_TRUE) {
+        return "true";
+    } else if (item.data_type == BCDUMP_KTAB_FALSE) {
+        return "false";
+    } else if (item.data_type == BCDUMP_KTAB_NIL) {
+        return "nil";
+    } else {
+        return "";
+    }
+}
+
+typedef struct {
+    TableItem constant;
+} ArrayItem;
+
+typedef struct {
+    TableItem key;
+    TableItem value;
+} HashItem <read=HashItemRead>;
+
+string HashItemRead(HashItem &item) {
+    local string str;
+    SPrintf(str, "%s = %s", TableItemRead(item.key), TableItemRead(item.value));
+    return str;
+}
+
+typedef struct {
+    uleb128 array_items_count;
+    uleb128 hash_items_count;
+
+    local int32 array_items_count_ = uleb128_value(array_items_count);
+    local int32 hash_items_count_ = uleb128_value(hash_items_count);
+    while (array_items_count_-- > 0) {
+        ArrayItem array_item;
+    }
+    while (hash_items_count_-- > 0) {
+        HashItem hash_item;
+    }
+} Table;
+
+typedef struct {
+    local uint32 len = 0;
+    uleb128 tp <format=hex>;
+    local int32 constant_type = uleb128_value(tp);
+    //Printf("ComplexConstant constant_type:%x\n", constant_type);
+    if (constant_type >= BCDUMP_KGC_STR) {
+        len = constant_type - BCDUMP_KGC_STR;
+        char str[len];
+        //Printf("len:%d str:%s\n", len, str);
+    } else if (constant_type == BCDUMP_KGC_TAB) {
+        Table table;
+    } else if (constant_type == BCDUMP_KGC_CHILD) {
+    } else if (constant_type != BCDUMP_KGC_CHILD) {
+        TNumber num;
+        if (constant_type == BCDUMP_KGC_COMPLEX) {
+            TNumber imaginary;
+        }
+    }
+} ComplexConstant <read=ComplexConstantRead, optimize=false>;
+
+string ComplexConstantRead(ComplexConstant &constant) {
+    if (constant.constant_type >= BCDUMP_KGC_STR) {
+        return constant.str;
+    } else if (constant.constant_type == BCDUMP_KGC_CHILD) {
+        return "BCDUMP_KGC_CHILD";
+    } else if (constant.constant_type == BCDUMP_KGC_TAB) {
+        return "BCDUMP_KGC_TAB";
+    } else if (constant_type == BCDUMP_KGC_COMPLEX) {
+        return "";  //TODO: parser BCDUMP_KGC_COMPLEX.
+    } else {
+        return TNumberRead(constant.num);
+    }
+}
+
+typedef struct {
+    uleb128_33 lo;
+    if (lo.val[0] & 0x1)
+        uleb128 hi;
+} NumericConstant <read=NumericConstantRead, optimize=false>;
+
+string NumericConstantRead(NumericConstant &constant) {
+    if (constant.lo.val[0] & 0x1) {
+        local string str;
+        local int i_lo = uleb128_33_value(constant.lo);
+        local int i_hi = uleb128_value(constant.hi);
+        //Printf("lo: 0x%lx\n", i_lo);
+        //Printf("hi: 0x%lx\n", i_hi);
+        local uchar bytes_lo[4];
+        local uchar bytes_hi[4];
+        local uchar bytes_double[8];
+        ConvertDataToBytes(i_lo, bytes_lo);
+        ConvertDataToBytes(i_hi, bytes_hi);
+        Memcpy(bytes_double, bytes_lo, 4);
+        Memcpy(bytes_double, bytes_hi, 4, 4);
+        /*
+        local int idx = 0;
+        for (idx=0; idx<4; idx++) {
+            Printf("%02x ", bytes_lo[idx]);
+        }
+        Printf("\n");
+        for (idx=0; idx<4; idx++) {
+            Printf("%02x ", bytes_hi[idx]);
+        }
+        Printf("\n");
+        for (idx=0; idx<8; idx++) {
+            Printf("%02x ", bytes_double[idx]);
+        }
+        Printf("\n");
+        */
+        local double n = ConvertBytesToDouble(bytes_double);
+        //Printf("n:%.14g\n", n);
+        SPrintf(str, "%.14g", ((uleb128_value(constant.hi) == (3 | (1 << 4))) ? 
+            i : 
+            n));
+        return str;
+    } else {
+        local string str;
+        local int number = uleb128_33_value(constant.lo);
+        if (number & 0x80000000)
+            number = -0x100000000 + number;
+
+        SPrintf(str, "0x%lx", number);
+        return str;
+    }
+}
+
+typedef struct(int32 upvalues_count, int32 complex_constants_count, int32 numeric_constants_count) {
+    //Printf("upvalues_count:%d, complex_constants_count:%d, numeric_constants_count:%d\n", upvalues_count, complex_constants_count, numeric_constants_count);
+    while (upvalues_count-- > 0) {
+        uint16 upvalue;
+    }
+    
+    while (complex_constants_count-- > 0) {
+        ComplexConstant constant;
+    }
+
+    while (numeric_constants_count-- > 0) {
+        NumericConstant numeric;
+    }
+} Constants <optimize=false>;
+
+typedef struct {
+    uleb128 flags <format=hex>;
+} GlobalHeaderFlags <read=GlobalHeaderFlagRead, optimize=false>;
+
+string GlobalHeaderFlagRead(GlobalHeaderFlags &flags) {
+    //local char bits = uleb128_value(flags.flags);
+
+    ////
+    local string str;
+    if (is_big_endian)
+            str += "FLAG_IS_BIG_ENDIAN | ";
+    if (is_stripped)
+        str += "FLAG_IS_STRIPPED | ";
+    if (has_ffi)
+        str += "FLAG_HAS_FFI | ";
+
+    if (Strlen(str) > 3)
+        str = SubStr(str, 0, Strlen(str) - 3);
+    return str;
+}
+
+typedef struct {
+    char signature[3]<format=hex>;   //".LJ"
+    uchar version;
+    if (Memcmp(signature, "\033LJ", 3) != 0) {
+        Warning("Error signature.");
+    }
+    GlobalHeaderFlags flags;
+    local string name = "";
+    if (is_stripped) {
+        Printf("stripped file.\n");
+    } else {
+        uleb128 length <format=hex>;
+        char chunkname[uleb128_value(length)];
+        name = chunkname;
+    }
+} GlobalHeader <optimize=false>;
+
+typedef struct {
+    uchar flags;
+} ProtoFlags <read=ProtoFlagsRead>;
+
+string ProtoFlagsRead(ProtoFlags& flags) {
+    local uchar bits = flags.flags;
+    local uchar has_ffi = (bits & FLAG_HAS_FFI);
+	bits &= ~FLAG_HAS_FFI;
+	local uchar has_iloop = (bits & FLAG_HAS_ILOOP);
+	bits &= ~FLAG_HAS_ILOOP;
+	local uchar has_jit =  !(bits & FLAG_JIT_DISABLED);
+	bits &= ~FLAG_JIT_DISABLED;
+	local uchar has_sub_prototypes = (bits & FLAG_HAS_CHILD);
+	bits &= ~FLAG_HAS_CHILD;
+	local uchar is_variadic = (bits & FLAG_IS_VARIADIC);
+	bits &= ~FLAG_IS_VARIADIC;
+
+	if (bits != 0) {
+        Warning("Unknown prototype flags.");
+    }
+
+	local string str = "";
+    if (has_ffi)
+        str += "FLAG_HAS_FFI | ";
+    if (has_iloop)
+        str += "FLAG_HAS_ILOOP | ";
+    if (has_jit)
+        str += "FLAG_HAS_JIT | ";
+    if (has_sub_prototypes)
+        str += "FLAG_HAS_CHILD | ";
+    if (is_variadic)
+        str += "FLAG_IS_VARIADIC | ";
+
+    if (Strlen(str) > 3)
+        str = SubStr(str, 0, Strlen(str) - 3);
+    return str;
+}
+
+struct Instruction;
+string InstructionRead(Instruction &inst) {
+    local uint32 codeword = inst.inst;
+    local INSTRUCTION_OPCODES op = (INSTRUCTION_OPCODES)codeword & 0xff;
+    local uint16 mode = get_mode(op);
+    local BCMode ma = get_mode_a(op);
+    local BCMode mb = get_mode_b(op);
+    local BCMode mc = get_mode_c(op);
+    local int args_count = get_args_count(op);
+    //Printf("inst:%x, op:%s(%x), mode:%x, ma:%s(%x), mb:%s(%x), mc:%s(%x), args_count:%x\n", codeword, EnumToString(op), op, mode, EnumToString(ma), ma, EnumToString(mb), mb, EnumToString(mc), mc, args_count);
+    local int A=0, B=0, CD=0;
+    if (args_count == 3) {
+        A = (codeword >> 8) & 0xFF;
+		CD = (codeword >> 16) & 0xFF;
+		B = (codeword >> 24) & 0xFF;
+    } else {
+		A = (codeword >> 8) & 0xFF;
+		CD = (codeword >> 16) & 0xFFFF;
+    }
+
+    local int complex_constants_count = uleb128_value(parentof(parentof(inst)).header.complex_constants_count);
+    //Printf("complex_constants_count:%x\n", complex_constants_count);
+
+    local string tmp;
+    SPrintf(tmp, "%04d    ", inst.pc_);
+    local string line = tmp + EnumToString(op);
+    if (ma != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, ma, A, inst.pc_));
+        line += " " + tmp;
+    }
+    if (mb != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, mb, B, inst.pc_));
+        line += " " + tmp;
+    }
+    if (mc != BCMnone) {
+        SPrintf(tmp, "%s", process_operand(inst, complex_constants_count, mc, CD, inst.pc_));
+        line += " " + tmp;
+    }
+
+    return line;
+}
+
+typedef struct {
+    uleb128 size <format=hex>;
+    if (uleb128_value(size) > 0) {
+        local int64 start = FTell();
+        ProtoFlags flags;
+        uchar arguments_count;
+        uchar framesize;
+        uchar upvalues_count <format=hex>;
+        uleb128 complex_constants_count <format=hex>;
+        uleb128 numeric_constants_count <format=hex>;
+        uleb128 instructions_count <format=hex>;
+        local int32 debuginfo_size_ = 0;
+        if (!is_stripped) {
+            uleb128 debuginfo_size <format=hex>;
+            debuginfo_size_ = uleb128_value(header.debuginfo_size);
+            uleb128 first_line_number <format=hex>;
+            uleb128 lines_count <format=hex>;
+        }
+    }
+} ProtoHeader <optimize=false>;
+
+typedef struct(int32 lines_count, int32 instructions_count) {
+    local int32 lineinfo_size = 0;
+    local int32 inst_count = instructions_count;
+    if (lines_count >= 65536) {
+        int line_number[inst_count];
+    } else if (lines_count >= 256) {
+        short line_number[inst_count];
+    } else {
+        char line_number[inst_count];
+    }
+} LineInfo <optimize=false>;
+
+typedef struct(int32 upvalues_count) {
+    while (upvalues_count-- > 0) {
+        string name;
+    }
+} UpValueNames;
+
+typedef struct(uchar tp) {
+    local uchar tp_ = tp;
+    //Printf("tp:0x%x\n", tp);
+    if (tp >= VARNAME__MAX) {
+        string str;
+    } else {
+        VARNAME_TYPE vartype;
+    }
+
+    if (tp != VARNAME_END) {
+        uleb128 start_addr;
+        uleb128 end_addr;
+    }
+} VarInfo <read=VarInfoRead>;
+
+string VarInfoRead(VarInfo &varinfo) {
+    if (varinfo.tp_ >= VARNAME__MAX) {
+        return varinfo.str;
+    } else {
+        return EnumToString(varinfo.vartype);
+    }
+}
+
+typedef struct {
+    local VARNAME_TYPE tp;
+    while (!FEof()) {
+        tp = (VARNAME_TYPE)ReadByte();
+        VarInfo varinfo(tp);
+        if (tp == VARNAME_END) {
+            break;
+        }
+    }
+} VarInfos;
+
+typedef struct(int32 first_line_number, int32 lines_count, int32 instructions_count, int32 debuginfo_size, int32 upvalues_count) {
+    if (debuginfo_size > 0) {
+        LineInfo lineinfo(lines_count, instructions_count);
+
+        if (upvalues_count > 0)
+            UpValueNames upvalue_names(upvalues_count);
+        
+        VarInfos varinfos;
+    }
+} DebugInfo <optimize=false>;
+
+typedef struct (int pc) {
+    local int pc_ = pc;
+    uint32 inst;
+} Instruction <read=InstructionRead>;
+
+typedef struct {
+    ProtoHeader header;
+
+    typedef struct(int inst_count) {
+        local int pc = 1;
+        local int inst_count_ = inst_count;
+        while (inst_count_-- > 0) {
+            Instruction inst(pc);
+            pc++;
+        }
+    } Instructions;
+
+    if (uleb128_value(header.size) > 0) {
+        if (uleb128_value(header.instructions_count) > 0)
+            local int inst_count = uleb128_value(header.instructions_count);
+            Instructions insts(inst_count);
+        if ((header.upvalues_count == 0) && (uleb128_value(header.complex_constants_count) == 0) && (uleb128_value(header.numeric_constants_count) == 0)) {
+        } else {
+            Constants constants(header.upvalues_count, uleb128_value(header.complex_constants_count), uleb128_value(header.numeric_constants_count));
+        }
+            
+        if (header.debuginfo_size_ > 0)
+            DebugInfo debuginfo(uleb128_value(header.first_line_number), uleb128_value(header.lines_count), uleb128_value(header.instructions_count), header.debuginfo_size_, header.upvalues_count);
+
+        local int64 end = FTell();
+        //Printf("start:0x%lx, end:0x%lx, size:0x%lx\n", header.start, end, end - header.start);
+        if (uleb128_value(header.size) != end - header.start) {
+            Warning("Incorrectly read: from 0x%lx to 0x%lx (0x%lx) instead of 0x%lx\n", header.start, end, end - header.start, uleb128_value(header.size));
+        }
+    }
+} Proto <optimize=false>;
+
+typedef struct {
+    GlobalHeader header;
+    while (!FEof())
+        Proto proto;
+} Luajit <read=LuajitRead>;
+
+string LuajitRead(Luajit &lj) {
+    return lj.header.name;
+}
+
+////////////////////////////////start from here//////////////////
+// $ luajit -bg ./hello.lua ./hello_debug.luajit
+// $ luajit -b ./hello.lua ./hello.luajit
+local char bits = ReadByte(4);
+local uchar is_big_endian = bits & _FLAG_IS_BIG_ENDIAN;
+bits &= ~_FLAG_IS_BIG_ENDIAN;
+local uchar is_stripped = bits & _FLAG_IS_STRIPPED;
+bits &= ~_FLAG_IS_STRIPPED;
+local uchar has_ffi = bits & _FLAG_HAS_FFI;
+bits &= ~_FLAG_HAS_FFI;
+
+if (bits != 0)
+    Warning("Unknown header flags: {0x%x}", bits);
+
+if (is_big_endian) {
+    BitEndian();
+} else {
+    //Printf("LittleEndian.\n");
+    LittleEndian();
+}
+
+
+local uint16 modes[93];
+
+void init_modes() {
+    modes[0] = 0x3183;
+    modes[1] = 0x3183;
+    modes[2] = 0x3983;
+    modes[3] = 0x3983;
+    modes[4] = 0x2183;
+    modes[5] = 0x2183;
+    modes[6] = 0x2503;
+    modes[7] = 0x2503;
+    modes[8] = 0x2483;
+    modes[9] = 0x2483;
+    modes[10] = 0x2403;
+    modes[11] = 0x2403;
+    modes[12] = 0xb181;
+    modes[13] = 0xb181;
+    modes[14] = 0xb180;
+    modes[15] = 0xb180;
+    modes[16] = 0xb181;
+    modes[17] = 0xb181;
+    modes[18] = 0x8181;
+    modes[19] = 0x2981;
+    modes[20] = 0x5499;
+    modes[21] = 0x5c99;
+    modes[22] = 0x6499;
+    modes[23] = 0x6c99;
+    modes[24] = 0x7499;
+    modes[25] = 0x5499;
+    modes[26] = 0x5c99;
+    modes[27] = 0x6499;
+    modes[28] = 0x6c99;
+    modes[29] = 0x7499;
+    modes[30] = 0x5199;
+    modes[31] = 0x5999;
+    modes[32] = 0x6199;
+    modes[33] = 0x6999;
+    modes[34] = 0x7199;
+    modes[35] = 0x7999;
+    modes[36] = 0x4221;
+    modes[37] = 0xb501;
+    modes[38] = 0xb701;
+    modes[39] = 0xb381;
+    modes[40] = 0xb481;
+    modes[41] = 0xb401;
+    modes[42] = 0xb102;
+    modes[43] = 0xb281;
+    modes[44] = 0xb185;
+    modes[45] = 0xb505;
+    modes[46] = 0xb485;
+    modes[47] = 0xb405;
+    modes[48] = 0xb684;
+    modes[49] = 0x1601;
+    modes[50] = 0x1301;
+    modes[51] = 0x1581;
+    modes[52] = 0x501;
+    modes[53] = 0xd03;
+    modes[54] = 0x199;
+    modes[55] = 0x519;
+    modes[56] = 0x319;
+    modes[57] = 0x99b;
+    modes[58] = 0xd1b;
+    modes[59] = 0xb1b;
+    modes[60] = 0xc82;
+    modes[61] = 0x4b32;
+    modes[62] = 0x4b32;
+    modes[63] = 0x4b02;
+    modes[64] = 0x4b02;
+    modes[65] = 0x4b32;
+    modes[66] = 0x4b32;
+    modes[67] = 0xb332;
+    modes[68] = 0xb682;
+    modes[69] = 0xb302;
+    modes[70] = 0xb304;
+    modes[71] = 0xb304;
+    modes[72] = 0xb304;
+    modes[73] = 0xb682;
+    modes[74] = 0xb682;
+    modes[75] = 0xb682;
+    modes[76] = 0xb682;
+    modes[77] = 0xb302;
+    modes[78] = 0xb682;
+    modes[79] = 0xb682;
+    modes[80] = 0xb302;
+    modes[81] = 0xb684;
+    modes[82] = 0xb684;
+    modes[83] = 0xb304;
+    modes[84] = 0xb684;
+    modes[85] = 0xb004;
+    modes[86] = 0xb004;
+    modes[87] = 0xb304;
+    modes[88] = 0xb004;
+    modes[89] = 0xb004;
+    modes[90] = 0xb304;
+    modes[91] = 0xb004;
+    modes[92] = 0xb004;
+}
+
+uint16 get_mode(INSTRUCTION_OPCODES op) {
+    return modes[op];
+}
+
+BCMode get_mode_a(INSTRUCTION_OPCODES op) {
+    return get_mode(op) & 7;
+}
+
+BCMode get_mode_b(INSTRUCTION_OPCODES op) {
+    return (get_mode(op) >> 3) & 15;
+}
+
+BCMode get_mode_c(INSTRUCTION_OPCODES op) {
+    return (get_mode(op) >> 7) & 15;
+}
+
+int get_args_count(INSTRUCTION_OPCODES op) {
+    local int count = 0;
+    local BCMode ma = get_mode_a(op);
+    local BCMode mb = get_mode_b(op);
+    local BCMode mc = get_mode_c(op);
+    if (ma != BCMnone)
+        count++;
+    if (mb != BCMnone)
+        count++;
+    if (mc != BCMnone)
+        count++;
+    return count;
+}
+
+string get_data_from_constants(Instruction &inst, int idx) {
+    local string str = ComplexConstantRead(parentof(parentof(inst)).constants.constant[idx]);
+    if (str == "BCDUMP_KGC_CHILD")
+        return "0";
+    else
+        return str;
+}
+
+string process_operand(Instruction &inst, int complex_constants_count, BCMode operand_type, int operand, int pc) {
+    local string str;
+    if ((operand_type == BCMstr) || 
+            (operand_type == BCMtab) || 
+            (operand_type == BCMfunc) || 
+            (operand_type == BCMcdata)) {
+        local int idx = complex_constants_count - operand - 1;
+        SPrintf(str, "%d  ;  %s", idx, get_data_from_constants(inst, idx));
+    } else if (operand_type == BCMjump) {
+        SPrintf(str, "==> %04d", operand + pc - 0x7FFF);
+    } else {
+        SPrintf(str, "%d", operand);
+    }
+        return str;
+}
+
+init_modes();
+/*
+Printf("ADDVV mode:0x%x\n", get_mode(ADDVV));
+Printf("MOV mode:0x%x\n", get_mode(MOV));
+Printf("RET0 mode:0x%x\n", get_mode(RET0));
+
+Printf("get_args_count() ADDVV:0x%x\n", get_args_count(ADDVV));
+Printf("get_args_count() JFORL:0x%x\n", get_args_count(JFORL));
+Printf("get_args_count() FUNCV:0x%x\n", get_args_count(FUNCV));
+*/
+Luajit lj;
