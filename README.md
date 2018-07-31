@@ -7,3 +7,7 @@
 ## [Lua程序逆向之Luajit文件格式](lua/lua_re3.md)
 
 ## [Lua程序逆向之Luajit字节码与反汇编](lua/lua_re4.md)
+
+## Lua程序逆向之为Luac编写IDA Pro文件加载器
+
+## Lua程序逆向之为Luac编写IDA Pro处理器模块
